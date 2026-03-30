@@ -1,0 +1,322 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS Variables for Trading Theme */
+:root {
+  --color-profit: #10b981;
+  --color-loss: #ef4444;
+  --color-neutral: #6b7280;
+  --color-primary: #0ea5e9;
+  --color-secondary: #8b5cf6;
+  --color-background: #0a0a0f;
+  --color-surface: #1a1a2e;
+  --color-surface-light: #27273a;
+  --color-border: #2d2d44;
+  --color-text-primary: #f3f4f6;
+  --color-text-secondary: #d1d5db;
+  --color-accent: #fbbf24;
+}
+
+/* Base Styles */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    scrollbar-width: thin;
+    scrollbar-color: #4b5563 #0a0a0f;
+  }
+
+  html::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  html::-webkit-scrollbar-track {
+    background: #0a0a0f;
+  }
+
+  html::-webkit-scrollbar-thumb {
+    background: #4b5563;
+    border-radius: 4px;
+  }
+
+  html::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+  }
+
+  body {
+    @apply bg-[#0a0a0f] text-gray-100;
+    font-feature-settings: "rounding" 1;
+  }
+
+  /* Smooth scrolling for all elements */
+  * {
+    @apply transition-colors duration-200 ease-in-out;
+  }
+
+  /* Remove focus outline, use custom styles */
+  button:focus,
+  a:focus {
+    @apply outline-none;
+  }
+}
+
+/* Component Styles */
+@layer components {
+  /* Trading Profit/Loss States */
+  .text-profit {
+    @apply text-green-400;
+  }
+
+  .text-loss {
+    @apply text-red-400;
+  }
+
+  .text-neutral {
+    @apply text-gray-400;
+  }
+
+  .bg-profit-soft {
+    @apply bg-green-900 bg-opacity-20;
+  }
+
+  .bg-loss-soft {
+    @apply bg-red-900 bg-opacity-20;
+  }
+
+  .border-profit {
+    @apply border-green-400;
+  }
+
+  .border-loss {
+    @apply border-red-400;
+  }
+
+  /* Signal Indicators */
+  .signal-buy {
+    @apply text-emerald-400;
+  }
+
+  .signal-sell {
+    @apply text-rose-400;
+  }
+
+  .signal-neutral {
+    @apply text-amber-400;
+  }
+
+  /* Trading Card Styles */
+  .trading-card {
+    @apply bg-[#1a1a2e] border border-[#2d2d44] rounded-lg p-4 backdrop-blur-sm;
+    transition: all 0.3s ease;
+  }
+
+  .trading-card:hover {
+    @apply border-[#4b5563] bg-[#27273a];
+    box-shadow: 0 0 20px rgba(14, 165, 233, 0.1);
+  }
+
+  /* Chart Container */
+  .chart-container {
+    @apply bg-[#1a1a2e] border border-[#2d2d44] rounded-lg p-4 backdrop-blur-sm;
+    min-height: 300px;
+  }
+
+  /* Stats Badge */
+  .stats-badge {
+    @apply inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium bg-[#27273a] border border-[#4b5563];
+  }
+
+  /* Button Base Styles */
+  .btn-primary {
+    @apply px-6 py-2 rounded-lg font-medium transition-all duration-200 ease-in-out;
+    @apply bg-blue-600 hover:bg-blue-700 text-white;
+    @apply active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 20px rgba(37, 99, 235, 0.4);
+  }
+
+  .btn-secondary {
+    @apply px-6 py-2 rounded-lg font-medium transition-all duration-200 ease-in-out;
+    @apply bg-[#27273a] hover:bg-[#35354a] text-gray-100 border border-[#4b5563];
+    @apply active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary:hover {
+    @apply border-[#6b7280];
+  }
+
+  /* Glass Morphism */
+  .glass-bg {
+    @apply bg-[#1a1a2e] bg-opacity-50 backdrop-blur-xl border border-[#2d2d44];
+  }
+
+  /* Grid Background */
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, #2d2d44 1px, transparent 1px),
+      linear-gradient(to bottom, #2d2d44 1px, transparent 1px);
+    background-size: 50px 50px;
+  }
+
+  /* Gradient Text */
+  .gradient-text {
+    background: linear-gradient(135deg, #0ea5e9 0%, #8b5cf6 50%, #ec4899 100%);
+    background-size: 200% 200%;
+    animation: gradientShift 8s ease infinite;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Input Styles */
+  .input-trading {
+    @apply w-full px-4 py-2 rounded-lg;
+    @apply bg-[#27273a] border border-[#4b5563];
+    @apply text-gray-100 placeholder-gray-500;
+    @apply transition-all duration-200;
+    @apply focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50;
+  }
+}
+
+/* Animations */
+@layer utilities {
+  @keyframes pulse-green {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  @keyframes pulse-red {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slide-down {
+    from {
+      opacity: 0;
+      transform: translateY(-20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes gradientShift {
+    0% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: -1000px 0;
+    }
+    100% {
+      background-position: 1000px 0;
+    }
+  }
+
+  .animate-pulse-green {
+    animation: pulse-green 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    color: var(--color-profit);
+  }
+
+  .animate-pulse-red {
+    animation: pulse-red 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    color: var(--color-loss);
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.5s ease-in-out;
+  }
+
+  .animate-slide-up {
+    animation: slide-up 0.5s ease-out;
+  }
+
+  .animate-slide-down {
+    animation: slide-down 0.3s ease-out;
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  .animate-shimmer {
+    animation: shimmer 2s infinite;
+  }
+
+  /* Smooth transition utilities */
+  .transition-smooth {
+    @apply transition-all duration-300 ease-in-out;
+  }
+
+  .transition-fast {
+    @apply transition-all duration-150 ease-in-out;
+  }
+
+  .transition-slow {
+    @apply transition-all duration-500 ease-in-out;
+  }
+}
+
+/* Responsive Improvements */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Dark mode scrollbar for Firefox */
+* {
+  scrollbar-color: #4b5563 #0a0a0f;
+}
