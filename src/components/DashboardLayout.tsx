@@ -21,3 +21,4 @@ export default function DashboardLayout({ children, isConnected = false }: Dashb
     </div>
   );
 }
+export { DashboardLayout };
