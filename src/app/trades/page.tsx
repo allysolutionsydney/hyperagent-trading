@@ -1,7 +1,7 @@
 'use client';
 
-import { DashboardLayout } from '@/components/DashboardLayout';
-import { Card } from '@/components/Card';
+import DashboardLayout from '@/components/DashboardLayout';
+import Card from '@/components/Card';
 import { useStore } from '@/hooks/useStore';
 import {
   Plus,

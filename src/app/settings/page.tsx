@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import Card from '@/components/Card';
-import useStore from '@/hooks/useStore';
+import { useStore } from '@/hooks/useStore';
 import {
   Key,
   Shield,
