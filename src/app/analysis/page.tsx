@@ -3,214 +3,273 @@
 import DashboardLayout from '@/components/DashboardLayout';
 import Card from '@/components/Card';
 import { useStore } from '@/hooks/useStore';
+import { useMarketData } from '@/hooks/useMarketData';
 import {
   Send,
   TrendingUp,
   TrendingDown,
   Zap,
-  BarChart3,
-  Target,
-  Clock,
   AlertCircle,
   CheckCircle,
-  ArrowUpRight,
-  ArrowDownLeft,
-  Volume2,
-  Wind,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Message as ChatMessage, TechnicalIndicators } from '@/types';
+import { formatPrice, formatTimestamp } from '@/utils/format';
 
-const MARKET_OVERVIEW = {
-  price: 46850,
-  change24h: 2.34,
-  volume24h: 28500000000,
-  fundingRate: 0.0156,
-};
+function buildBasicIndicators(candles: Array<{ close: number; high: number; low: number; volume: number }>): TechnicalIndicators {
+  if (!candles.length) return {};
 
-const TECHNICAL_INDICATORS = {
-  rsi: 65,
-  rsiStatus: 'Overbought',
-  macd: 'Bullish',
-  bb: 'Upper',
-  support: 44500,
-  resistance: 48200,
-  trend: 'Uptrend',
-  trendConfidence: 78,
-};
+  const closes = candles.map((c) => c.close);
+  const highs = candles.map((c) => c.high);
+  const lows = candles.map((c) => c.low);
+  const volumes = candles.map((c) => c.volume);
 
-const MARKET_REGIMES = [
-  'Trending Up',
-  'Ranging',
-  'Trending Up',
-  'Trending Up',
-  'High Vol',
-  'Trending Up',
-];
+  const sma = (period: number) => {
+    if (closes.length < period) return undefined;
+    const slice = closes.slice(-period);
+    return slice.reduce((a, b) => a + b, 0) / period;
+  };
 
-interface Message {
-  id: string;
-  role: 'user' | 'ai';
-  content: string;
-  timestamp: Date;
+  return {
+    sma20: sma(20),
+    sma50: sma(50),
+    sma200: sma(200),
+    atr: Math.max(...highs) - Math.min(...lows),
+    volumeProfile: {
+      interpretation: `Average volume ${(volumes.reduce((a, b) => a + b, 0) / volumes.length).toFixed(2)}`,
+      pocLevel: closes[closes.length - 1],
+      valueLow: Math.min(...lows),
+      valueHigh: Math.max(...highs),
+    },
+  };
 }
 
 const SUGGESTED_QUESTIONS = [
   "What's the current trend?",
-  'Should I go long?',
-  'Analyze support/resistance levels',
-  'What patterns do you see?',
-];
-
-const TRADE_IDEAS = [
-  {
-    id: '1',
-    direction: 'Long',
-    entry: 46500,
-    stopLoss: 45000,
-    takeProfit: 49500,
-    riskReward: 3.33,
-    confidence: 78,
-  },
-  {
-    id: '2',
-    direction: 'Short',
-    entry: 48200,
-    stopLoss: 49500,
-    takeProfit: 46000,
-    riskReward: 2.86,
-    confidence: 65,
-  },
+  'What are the key support and resistance levels?',
+  'Should I be looking for a breakout or mean reversion?',
+  'What does current market structure suggest?',
 ];
 
 export default function AnalysisPage() {
   const store = useStore();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      role: 'ai',
-      content:
-        'Hello! I am your AI trading analyst. I can help you analyze market conditions, identify trading opportunities, and provide technical insights. What would you like to know?',
-      timestamp: new Date(Date.now() - 5 * 60000),
-    },
-  ]);
+  const { isLoading, error } = useMarketData();
   const [inputValue, setInputValue] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
 
-  const handleSendMessage = () => {
+  const candles = store.candles || [];
+  const selectedCoin = store.selectedCoin;
+  const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
+  const periodChange = candles.length > 1 ? ((candles[candles.length - 1].close - candles[0].open) / candles[0].open) * 100 : 0;
+  const indicators = useMemo(() => buildBasicIndicators(candles), [candles]);
+
+  const chatMessages: ChatMessage[] = store.chatMessages.length
+    ? store.chatMessages
+    : [
+        {
+          id: 'seed',
+          role: 'assistant',
+          content: 'Ask for analysis once market data and API keys are loaded. I will use the actual AI route, not canned responses.',
+          timestamp: Date.now(),
+        },
+      ];
+
+  const runStructuredAnalysis = async () => {
+    if (!store.apiKeys.openai) {
+      return;
+    }
+    if (!candles.length) {
+      return;
+    }
+
+    setAnalysisBusy(true);
+    store.setAnalyzing(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'analyze',
+          apiKey: store.apiKeys.openai,
+          data: {
+            coin: selectedCoin,
+            candles,
+            indicators,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Analysis failed: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      store.setAnalysis(result.data);
+    } catch (err) {
+      console.error('Structured analysis failed:', err);
+    } finally {
+      setAnalysisBusy(false);
+      store.setAnalyzing(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: inputValue,
-      timestamp: new Date(),
-    };
+    const nextMessages: ChatMessage[] = [
+      ...store.chatMessages,
+      {
+        id: `${Date.now()}`,
+        role: 'user',
+        content: inputValue,
+        timestamp: Date.now(),
+      },
+    ];
 
-    setMessages((prev) => [...prev, userMessage]);
-
-    // Simulate AI response
-    setTimeout(() => {
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'ai',
-        content:
-          'Based on current technical indicators, BTC is showing strong bullish momentum. The RSI is at 65 (approaching overbought), but the MACD is still above the signal line. I recommend watching for support at $45,000 and resistance at $48,200. The funding rate is positive at 0.0156%, indicating bullish sentiment.',
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, aiMessage]);
-    }, 1000);
-
+    store.clearChatMessages();
+    nextMessages.forEach((msg) => store.addChatMessage(msg));
+    const currentInput = inputValue;
     setInputValue('');
+
+    if (!store.apiKeys.openai) {
+      store.addChatMessage({
+        id: `${Date.now()}-warn`,
+        role: 'assistant',
+        content: 'OpenAI API key is missing in Settings, so live AI chat is unavailable right now.',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    setChatBusy(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'chat',
+          apiKey: store.apiKeys.openai,
+          data: {
+            messages: [
+              ...nextMessages,
+              {
+                id: `${Date.now()}-context`,
+                role: 'user',
+                content: `Current coin: ${selectedCoin}. Current price: ${currentPrice}. Period change: ${periodChange.toFixed(2)}%. User question: ${currentInput}`,
+                timestamp: Date.now(),
+              },
+            ],
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Chat failed: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      store.addChatMessage({
+        id: `${Date.now()}-assistant`,
+        role: 'assistant',
+        content: result.data,
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      console.error('Chat analysis failed:', err);
+      store.addChatMessage({
+        id: `${Date.now()}-error`,
+        role: 'assistant',
+        content: 'Live AI chat failed. Check the API key and backend route health.',
+        timestamp: Date.now(),
+      });
+    } finally {
+      setChatBusy(false);
+    }
   };
 
-  const handleSuggestedQuestion = (question: string) => {
-    setInputValue(question);
-  };
-
-  const currentRegime = MARKET_REGIMES[MARKET_REGIMES.length - 1];
-  const regimeColor =
-    currentRegime === 'Trending Up'
-      ? 'text-green-400'
-      : currentRegime === 'Trending Down'
-        ? 'text-red-400'
-        : 'text-yellow-400';
-
-  const regimeBg =
-    currentRegime === 'Trending Up'
-      ? 'bg-green-500/20'
-      : currentRegime === 'Trending Down'
-        ? 'bg-red-500/20'
-        : 'bg-yellow-500/20';
+  const latestAnalysis = store.analysisResult;
+  const marketStateText = currentPrice
+    ? `${selectedCoin} is trading at ${formatPrice(currentPrice)} (${periodChange >= 0 ? '+' : ''}${periodChange.toFixed(2)}% over loaded period).`
+    : 'No live market price available yet.';
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header */}
         <div>
           <h1 className="text-3xl font-bold text-white">AI Market Analysis</h1>
-          <p className="text-gray-400 mt-1">Ask questions, analyze patterns, and discover opportunities</p>
+          <p className="text-gray-400 mt-1">Real market context, real AI route, no canned analysis</p>
         </div>
 
-        {/* Market Overview Cards */}
+        {error && (
+          <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm text-yellow-300">
+            Market data issue: {error}
+          </div>
+        )}
+
+        {!store.apiKeys.openai && (
+          <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm text-yellow-300">
+            OpenAI API key is not configured. Analysis page can still show market context, but live AI analysis/chat is disabled until you add a key in Settings.
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
             <div className="p-4">
               <p className="text-gray-400 text-sm mb-2">Current Price</p>
-              <p className="text-2xl font-bold text-white">
-                ${MARKET_OVERVIEW.price.toLocaleString()}
-              </p>
-              <p className="text-green-400 text-sm mt-2 flex items-center gap-1">
-                <TrendingUp className="w-4 h-4" />
-                +{MARKET_OVERVIEW.change24h}% (24h)
+              <p className="text-2xl font-bold text-white">{currentPrice ? formatPrice(currentPrice) : '—'}</p>
+              <p className={`text-sm mt-2 flex items-center gap-1 ${periodChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {periodChange >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                {periodChange.toFixed(2)}% loaded-period change
               </p>
             </div>
           </Card>
           <Card>
             <div className="p-4">
-              <p className="text-gray-400 text-sm mb-2">24h Volume</p>
-              <p className="text-2xl font-bold text-white">
-                ${(MARKET_OVERVIEW.volume24h / 1000000000).toFixed(1)}B
-              </p>
-              <p className="text-blue-400 text-sm mt-2">Exchange Volume</p>
+              <p className="text-gray-400 text-sm mb-2">Candles Loaded</p>
+              <p className="text-2xl font-bold text-white">{candles.length}</p>
+              <p className="text-blue-400 text-sm mt-2">Market data hook</p>
             </div>
           </Card>
           <Card>
             <div className="p-4">
-              <p className="text-gray-400 text-sm mb-2">Funding Rate</p>
-              <p className="text-2xl font-bold text-white">
-                {MARKET_OVERVIEW.fundingRate.toFixed(4)}%
-              </p>
-              <p className="text-green-400 text-sm mt-2">Bullish Signal</p>
+              <p className="text-gray-400 text-sm mb-2">Current Regime</p>
+              <p className="text-2xl font-bold text-white">{store.currentRegime}</p>
+              <p className="text-gray-400 text-sm mt-2">Store-driven</p>
             </div>
           </Card>
           <Card>
             <div className="p-4">
-              <p className="text-gray-400 text-sm mb-2">Market Regime</p>
-              <p className={`text-2xl font-bold ${regimeColor}`}>{currentRegime}</p>
-              <p className="text-gray-400 text-sm mt-2">Current Condition</p>
+              <p className="text-gray-400 text-sm mb-2">Analysis Status</p>
+              <p className="text-2xl font-bold text-white">{latestAnalysis ? 'Ready' : 'Idle'}</p>
+              <p className="text-gray-400 text-sm mt-2">{analysisBusy || store.isAnalyzing ? 'Running now' : 'On demand'}</p>
             </div>
           </Card>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* AI Chat Interface */}
           <div className="lg:col-span-2">
             <Card className="h-full flex flex-col">
               <div className="p-6 flex-1 flex flex-col">
-                <h2 className="text-lg font-semibold text-white mb-4">
-                  AI Chat Analysis
-                </h2>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold text-white">AI Chat Analysis</h2>
+                  <button
+                    onClick={runStructuredAnalysis}
+                    disabled={analysisBusy || !store.apiKeys.openai || candles.length === 0}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                  >
+                    <Zap className="w-4 h-4" />
+                    {analysisBusy ? 'Analyzing...' : 'Run Structured Analysis'}
+                  </button>
+                </div>
 
-                {/* Chat Messages */}
+                <div className="mb-4 rounded-lg border border-gray-800 bg-gray-900/60 p-4 text-sm text-gray-300">
+                  {marketStateText}
+                </div>
+
                 <div className="flex-1 overflow-y-auto space-y-4 mb-4 min-h-96">
-                  {messages.map((msg) => (
-                    <div
-                      key={msg.id}
-                      className={`flex ${
-                        msg.role === 'user'
-                          ? 'justify-end'
-                          : 'justify-start'
-                      }`}
-                    >
+                  {chatMessages.map((msg) => (
+                    <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                       <div
                         className={`max-w-xs lg:max-w-sm px-4 py-2 rounded-lg ${
                           msg.role === 'user'
@@ -219,26 +278,20 @@ export default function AnalysisPage() {
                         }`}
                       >
                         <p className="text-sm">{msg.content}</p>
-                        <p className="text-xs mt-1 opacity-70">
-                          {msg.timestamp.toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </p>
+                        <p className="text-xs mt-1 opacity-70">{formatTimestamp(msg.timestamp, true)}</p>
                       </div>
                     </div>
                   ))}
                 </div>
 
-                {/* Suggested Questions */}
-                {messages.length === 1 && (
+                {store.chatMessages.length <= 1 && (
                   <div className="mb-4 space-y-2">
                     <p className="text-xs text-gray-400">Suggested questions:</p>
                     <div className="grid grid-cols-1 gap-2">
                       {SUGGESTED_QUESTIONS.map((q, idx) => (
                         <button
                           key={idx}
-                          onClick={() => handleSuggestedQuestion(q)}
+                          onClick={() => setInputValue(q)}
                           className="text-left px-3 py-2 border border-gray-700 hover:border-blue-500 rounded text-sm text-gray-300 hover:text-white transition-colors"
                         >
                           {q}
@@ -248,23 +301,21 @@ export default function AnalysisPage() {
                   </div>
                 )}
 
-                {/* Input Area */}
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
-                    onKeyPress={(e) => {
-                      if (e.key === 'Enter') {
-                        handleSendMessage();
-                      }
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSendMessage();
                     }}
-                    placeholder="Ask me about the market..."
+                    placeholder="Ask about the current market..."
                     className="flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
                   />
                   <button
                     onClick={handleSendMessage}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2"
+                    disabled={chatBusy || !inputValue.trim()}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white rounded-lg transition-colors flex items-center gap-2"
                   >
                     <Send className="w-4 h-4" />
                   </button>
@@ -273,241 +324,85 @@ export default function AnalysisPage() {
             </Card>
           </div>
 
-          {/* Technical Analysis Panel */}
           <Card>
             <div className="p-6 space-y-6">
               <div>
-                <h3 className="text-sm font-semibold text-gray-400 mb-4">
-                  TECHNICAL INDICATORS
-                </h3>
-
-                {/* RSI */}
-                <div className="mb-4">
-                  <div className="flex justify-between items-center mb-2">
-                    <p className="text-sm text-gray-400">RSI (14)</p>
-                    <p className="text-sm font-semibold text-white">
-                      {TECHNICAL_INDICATORS.rsi}
-                    </p>
+                <h3 className="text-sm font-semibold text-gray-400 mb-4">LIVE MARKET SNAPSHOT</h3>
+                <div className="space-y-3 text-sm">
+                  <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                    <span className="text-gray-400">Selected Coin</span>
+                    <span className="text-white font-semibold">{selectedCoin}</span>
                   </div>
-                  <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-yellow-500 to-red-500"
-                      style={{ width: `${TECHNICAL_INDICATORS.rsi}%` }}
-                    />
+                  <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                    <span className="text-gray-400">Current Price</span>
+                    <span className="text-white font-semibold">{currentPrice ? formatPrice(currentPrice) : '—'}</span>
                   </div>
-                  <p className="text-xs text-yellow-400 mt-2">
-                    {TECHNICAL_INDICATORS.rsiStatus}
-                  </p>
-                </div>
-
-                {/* MACD */}
-                <div className="bg-gray-800/50 rounded p-3 mb-4">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-400">MACD</span>
-                    <span className="text-sm font-semibold text-green-400">
-                      {TECHNICAL_INDICATORS.macd}
-                    </span>
+                  <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                    <span className="text-gray-400">SMA20</span>
+                    <span className="text-blue-400 font-semibold">{indicators.sma20 ? formatPrice(indicators.sma20) : '—'}</span>
                   </div>
-                </div>
-
-                {/* Bollinger Bands */}
-                <div className="bg-gray-800/50 rounded p-3 mb-4">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-400">Bollinger Bands</span>
-                    <span className="text-sm font-semibold text-yellow-400">
-                      {TECHNICAL_INDICATORS.bb}
-                    </span>
+                  <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                    <span className="text-gray-400">SMA50</span>
+                    <span className="text-blue-400 font-semibold">{indicators.sma50 ? formatPrice(indicators.sma50) : '—'}</span>
+                  </div>
+                  <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                    <span className="text-gray-400">ATR Proxy</span>
+                    <span className="text-yellow-400 font-semibold">{indicators.atr ? indicators.atr.toFixed(2) : '—'}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Support & Resistance */}
               <div>
-                <h3 className="text-sm font-semibold text-gray-400 mb-3">
-                  SUPPORT & RESISTANCE
-                </h3>
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center bg-gray-800/50 rounded p-3">
-                    <span className="text-sm text-gray-400">Resistance</span>
-                    <span className="text-sm font-semibold text-red-400">
-                      ${TECHNICAL_INDICATORS.resistance.toLocaleString()}
-                    </span>
+                <h3 className="text-sm font-semibold text-gray-400 mb-3">STRUCTURED ANALYSIS</h3>
+                {!latestAnalysis ? (
+                  <div className="bg-gray-800/50 rounded p-3 text-sm text-gray-400">
+                    No structured AI analysis yet.
                   </div>
-                  <div className="flex justify-between items-center bg-gray-800/50 rounded p-3">
-                    <span className="text-sm text-gray-400">Support</span>
-                    <span className="text-sm font-semibold text-green-400">
-                      ${TECHNICAL_INDICATORS.support.toLocaleString()}
-                    </span>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                      <span className="text-gray-400">Trend</span>
+                      <span className="text-white font-semibold">{latestAnalysis.trend}</span>
+                    </div>
+                    <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                      <span className="text-gray-400">Recommendation</span>
+                      <span className="text-blue-400 font-semibold">{latestAnalysis.recommendation}</span>
+                    </div>
+                    <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                      <span className="text-gray-400">Confidence</span>
+                      <span className="text-green-400 font-semibold">{latestAnalysis.confidence}%</span>
+                    </div>
+                    <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                      <span className="text-gray-400">Support</span>
+                      <span className="text-green-400 font-semibold">{formatPrice(latestAnalysis.keyLevels?.support?.[0] || 0)}</span>
+                    </div>
+                    <div className="bg-gray-800/50 rounded p-3 flex justify-between">
+                      <span className="text-gray-400">Resistance</span>
+                      <span className="text-red-400 font-semibold">{formatPrice(latestAnalysis.keyLevels?.resistance?.[0] || 0)}</span>
+                    </div>
+                    <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3 text-sm text-gray-300">
+                      {latestAnalysis.technicalSummary}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
-              {/* Trend */}
-              <div>
-                <h3 className="text-sm font-semibold text-gray-400 mb-3">
-                  TREND ANALYSIS
-                </h3>
-                <div className="bg-gray-800/50 rounded p-3 space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-400">Direction</span>
-                    <span className="text-sm font-semibold text-green-400 flex items-center gap-1">
-                      <TrendingUp className="w-4 h-4" />
-                      {TECHNICAL_INDICATORS.trend}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-400">Confidence</span>
-                    <span className="text-sm font-semibold text-blue-400">
-                      {TECHNICAL_INDICATORS.trendConfidence}%
-                    </span>
-                  </div>
-                </div>
+              <div className="pt-2 border-t border-gray-800 text-xs text-gray-500 flex items-start gap-2">
+                {store.apiKeys.openai ? (
+                  <>
+                    <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                    <span>Live AI route available if the configured key is valid.</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-4 h-4 text-yellow-400 mt-0.5" />
+                    <span>Add an OpenAI key in Settings to enable live analysis.</span>
+                  </>
+                )}
               </div>
             </div>
           </Card>
         </div>
-
-        {/* Market Regime Section */}
-        <Card>
-          <div className="p-6">
-            <h2 className="text-lg font-semibold text-white mb-4">
-              Market Regime History
-            </h2>
-
-            {/* Current Regime */}
-            <div className="mb-6 pb-6 border-b border-gray-700">
-              <div className="flex items-center gap-4">
-                <div className={`px-4 py-2 rounded-lg font-semibold ${regimeBg} ${regimeColor}`}>
-                  {currentRegime}
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">Current Market Regime</p>
-                  <p className="text-xs text-gray-500 mt-1">Updated 2 minutes ago</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Regime Timeline */}
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-gray-400 mb-4">Last 30 periods</p>
-              <div className="flex gap-1 h-20 items-end">
-                {MARKET_REGIMES.map((regime, idx) => {
-                  const colors = {
-                    'Trending Up': 'bg-green-500',
-                    'Trending Down': 'bg-red-500',
-                    'Ranging': 'bg-yellow-500',
-                    'High Vol': 'bg-purple-500',
-                    'Low Vol': 'bg-blue-500',
-                  };
-                  return (
-                    <div
-                      key={idx}
-                      className={`flex-1 ${colors[regime as keyof typeof colors]} opacity-${
-                        Math.ceil(((idx + 1) / MARKET_REGIMES.length) * 100) / 10
-                      } rounded-t`}
-                      style={{
-                        height: `${((idx + 1) / MARKET_REGIMES.length) * 100}%`,
-                        opacity: 0.5 + (idx / MARKET_REGIMES.length) * 0.5,
-                      }}
-                      title={regime}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        {/* Trade Ideas Section */}
-        <Card>
-          <div className="p-6">
-            <h2 className="text-lg font-semibold text-white mb-4">
-              AI-Generated Trade Ideas
-            </h2>
-
-            <div className="space-y-4">
-              {TRADE_IDEAS.map((idea) => (
-                <div
-                  key={idea.id}
-                  className="border border-gray-700 rounded-lg p-4 hover:border-blue-500 transition-colors"
-                >
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                    {/* Left side */}
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`px-4 py-2 rounded-lg font-semibold text-white ${
-                            idea.direction === 'Long'
-                              ? 'bg-green-600'
-                              : 'bg-red-600'
-                          }`}
-                        >
-                          {idea.direction === 'Long' ? (
-                            <ArrowUpRight className="w-4 h-4" />
-                          ) : (
-                            <ArrowDownLeft className="w-4 h-4" />
-                          )}
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-white">
-                            {idea.direction} Position
-                          </p>
-                          <p className="text-xs text-gray-400">
-                            Confidence: {idea.confidence}%
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-sm">
-                        <div className="bg-gray-800/50 rounded p-2">
-                          <p className="text-gray-400 text-xs">Entry</p>
-                          <p className="text-white font-semibold">
-                            ${idea.entry.toLocaleString()}
-                          </p>
-                        </div>
-                        <div className="bg-gray-800/50 rounded p-2">
-                          <p className="text-gray-400 text-xs">Stop Loss</p>
-                          <p className="text-red-400 font-semibold">
-                            ${idea.stopLoss.toLocaleString()}
-                          </p>
-                        </div>
-                        <div className="bg-gray-800/50 rounded p-2 col-span-2">
-                          <p className="text-gray-400 text-xs">Take Profit</p>
-                          <p className="text-green-400 font-semibold">
-                            ${idea.takeProfit.toLocaleString()}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Right side - Risk/Reward */}
-                    <div className="flex flex-col justify-between">
-                      <div className="text-center">
-                        <p className="text-gray-400 text-sm mb-2">Risk/Reward Ratio</p>
-                        <p className="text-4xl font-bold text-blue-400">
-                          {idea.riskReward.toFixed(2)}
-                        </p>
-                      </div>
-
-                      <button className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-2">
-                        <Target className="w-4 h-4" />
-                        Execute This Trade
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Confidence bar */}
-                  <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-yellow-500 to-green-500"
-                      style={{ width: `${idea.confidence}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Card>
       </div>
     </DashboardLayout>
   );

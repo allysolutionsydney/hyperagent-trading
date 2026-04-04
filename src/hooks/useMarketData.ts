@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from './useStore';
-import { Candle, OrderBook } from '../types';
 
 interface UseMarketDataReturn {
   isLoading: boolean;
@@ -8,11 +7,43 @@ interface UseMarketDataReturn {
   refresh: () => Promise<void>;
 }
 
-/**
- * Custom hook that polls market data every 5 seconds
- * Fetches candles, order book, and mid prices for the selected coin
- * Automatically updates the store
- */
+function normalizeCandle(c: any) {
+  return {
+    timestamp: c.timestamp ?? c.t,
+    open: Number(c.open ?? c.o),
+    high: Number(c.high ?? c.h),
+    low: Number(c.low ?? c.l),
+    close: Number(c.close ?? c.c),
+    volume: Number(c.volume ?? c.v),
+  };
+}
+
+function normalizeOrderBook(ob: any) {
+  if (!ob) return null;
+
+  const bids = Array.isArray(ob.bids)
+    ? ob.bids.map((b: any) => [Number(b.px ?? b[0]), Number(b.sz ?? b[1])])
+    : [];
+  const asks = Array.isArray(ob.asks)
+    ? ob.asks.map((a: any) => [Number(a.px ?? a[0]), Number(a.sz ?? a[1])])
+    : [];
+
+  const bestBid = bids[0]?.[0] ?? 0;
+  const bestAsk = asks[0]?.[0] ?? 0;
+  const spread = bestAsk && bestBid ? bestAsk - bestBid : 0;
+  const totalBid = bids.reduce((sum: number, [, size]: any) => sum + size, 0);
+  const totalAsk = asks.reduce((sum: number, [, size]: any) => sum + size, 0);
+  const bidAskRatio = totalAsk > 0 ? totalBid / totalAsk : 0;
+
+  return {
+    timestamp: ob.ts ?? Date.now(),
+    bids,
+    asks,
+    spread,
+    bidAskRatio,
+  };
+}
+
 export function useMarketData(): UseMarketDataReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,9 +63,8 @@ export function useMarketData(): UseMarketDataReturn {
       setIsLoading(true);
       setError(null);
 
-      // Fetch candles (1-hour timeframe)
       const candlesResponse = await fetch(
-        `/api/hyperliquid/candles?coin=${selectedCoin}&interval=1h&limit=100${
+        `/api/hyperliquid?action=candles&coin=${selectedCoin}&interval=1h${
           isTestnet ? '&testnet=true' : ''
         }`
       );
@@ -44,13 +74,12 @@ export function useMarketData(): UseMarketDataReturn {
       }
 
       const candlesData = await candlesResponse.json();
-      if (candlesData.success && Array.isArray(candlesData.data)) {
-        setCandles(candlesData.data);
+      if (Array.isArray(candlesData.data)) {
+        setCandles(candlesData.data.map(normalizeCandle));
       }
 
-      // Fetch order book
       const orderBookResponse = await fetch(
-        `/api/hyperliquid/orderbook?coin=${selectedCoin}${
+        `/api/hyperliquid?action=orderbook&coin=${selectedCoin}${
           isTestnet ? '&testnet=true' : ''
         }`
       );
@@ -60,13 +89,13 @@ export function useMarketData(): UseMarketDataReturn {
       }
 
       const orderBookData = await orderBookResponse.json();
-      if (orderBookData.success && orderBookData.data) {
-        setOrderBook(orderBookData.data);
+      if (orderBookData.data) {
+        const normalized = normalizeOrderBook(orderBookData.data);
+        if (normalized) setOrderBook(normalized);
       }
 
-      // Fetch all mid prices
       const midsResponse = await fetch(
-        `/api/hyperliquid/mids${isTestnet ? '?testnet=true' : ''}`
+        `/api/hyperliquid?action=allmids${isTestnet ? '&testnet=true' : ''}`
       );
 
       if (!midsResponse.ok) {
@@ -74,8 +103,7 @@ export function useMarketData(): UseMarketDataReturn {
       }
 
       const midsData = await midsResponse.json();
-      if (midsData.success && midsData.data) {
-        // If we have all mids, replace entirely; otherwise update
+      if (midsData.data) {
         if (Object.keys(midsData.data).length > 10) {
           setAllMids(midsData.data);
         } else {
@@ -91,24 +119,17 @@ export function useMarketData(): UseMarketDataReturn {
     }
   };
 
-  /**
-   * Manual refresh function that fetches data immediately
-   */
   const refresh = async () => {
     await fetchMarketData();
   };
 
-  // Set up polling interval
   useEffect(() => {
-    // Initial fetch
     fetchMarketData();
 
-    // Set up interval for subsequent fetches
     pollIntervalRef.current = setInterval(() => {
       fetchMarketData();
-    }, 5000); // Poll every 5 seconds
+    }, 5000);
 
-    // Cleanup on unmount or when dependencies change
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);

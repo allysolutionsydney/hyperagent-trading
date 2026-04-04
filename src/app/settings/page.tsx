@@ -13,7 +13,6 @@ import {
   EyeOff,
   CheckCircle,
   AlertTriangle,
-  RefreshCw,
 } from 'lucide-react';
 
 interface ApiKeyStatus {
@@ -33,7 +32,6 @@ const STRATEGIES = ['RSI', 'MACD', 'Bollinger', 'MA Crossover', 'Volume', 'AI Se
 export default function SettingsPage() {
   const store = useStore();
 
-  // Form state
   const [apiKeys, setApiKeys] = useState({
     openai: '',
     hyperliquid: '',
@@ -69,7 +67,7 @@ export default function SettingsPage() {
     Bollinger: { enabled: true, weight: 20, params: { period: 20, stdDev: 2 } },
     'MA Crossover': { enabled: true, weight: 20, params: { shortPeriod: 20, longPeriod: 50 } },
     Volume: { enabled: true, weight: 10, params: { avgPeriod: 20, spikeMultiplier: 2 } },
-    'AI Sentiment': { enabled: true, weight: 10, params: { model: 'gpt-3.5-turbo', temperature: 0.7 } },
+    'AI Sentiment': { enabled: true, weight: 10, params: { model: 'gpt-4o', temperature: 0.7 } },
   });
 
   const [tradingPrefs, setTradingPrefs] = useState({
@@ -85,56 +83,41 @@ export default function SettingsPage() {
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showNetworkWarning, setShowNetworkWarning] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
-  // Load settings from store on mount
   useEffect(() => {
-    if (store) {
-      // Load from store if available
-      const savedSettings = store.settings || {};
-      if (savedSettings.apiKeys) setApiKeys(savedSettings.apiKeys);
-      if (savedSettings.network) setNetwork(savedSettings.network);
-      if (savedSettings.riskSettings) setRiskSettings(savedSettings.riskSettings);
-      if (savedSettings.strategies) setStrategies(savedSettings.strategies);
-      if (savedSettings.tradingPrefs) setTradingPrefs(savedSettings.tradingPrefs);
+    const savedSettings = store.settings || {};
+    if (savedSettings.apiKeys) setApiKeys(savedSettings.apiKeys);
+    if (savedSettings.network) setNetwork(savedSettings.network);
+    if (savedSettings.riskSettings) setRiskSettings(savedSettings.riskSettings as any);
+    if (savedSettings.strategies && Object.keys(savedSettings.strategies).length > 0) {
+      setStrategies(savedSettings.strategies as Record<string, StrategySettings>);
     }
-  }, [store]);
+    if (savedSettings.tradingPrefs) setTradingPrefs(savedSettings.tradingPrefs as any);
+  }, [store.settings]);
 
   const handleKeyChange = (key: string, value: string) => {
-    setApiKeys(prev => ({ ...prev, [key]: value }));
+    setApiKeys((prev) => ({ ...prev, [key]: value }));
     setIsDirty(true);
     if (key !== 'walletAddress') {
-      setApiStatus(prev => ({ ...prev, [key]: 'untested' }));
+      setApiStatus((prev) => ({ ...prev, [key]: 'untested' }));
     }
   };
 
   const toggleKeyVisibility = (key: string) => {
-    setShowKeys(prev => ({ ...prev, [key]: !prev[key] }));
+    setShowKeys((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const testConnection = async (keyType: string) => {
-    setApiStatus(prev => ({ ...prev, [keyType]: 'untested' }));
-    try {
-      const response = await fetch('/api/test-connection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyType, key: apiKeys[keyType as keyof typeof apiKeys] }),
-      });
-
-      if (response.ok) {
-        setApiStatus(prev => ({ ...prev, [keyType]: 'valid' }));
-      } else {
-        setApiStatus(prev => ({ ...prev, [keyType]: 'invalid' }));
-      }
-    } catch (error) {
-      setApiStatus(prev => ({ ...prev, [keyType]: 'invalid' }));
-    }
+  const markTestUntested = (keyType: keyof ApiKeyStatus) => {
+    setApiStatus((prev) => ({ ...prev, [keyType]: 'untested' }));
+    setSaveMessage('Live key testing is not wired yet. Keys are saved locally for now.');
   };
 
   const autoDetectWallet = () => {
-    // In a real implementation, this would derive the wallet address from the private key
-    if (apiKeys.hyperliquid.startsWith('0x') || apiKeys.hyperliquid.length === 64) {
-      setApiKeys(prev => ({ ...prev, walletAddress: '0x' + 'derived-address-placeholder' }));
+    if (apiKeys.hyperliquid.startsWith('0x') || apiKeys.hyperliquid.length >= 64) {
+      setApiKeys((prev) => ({ ...prev, walletAddress: '0x-derived-locally-later' }));
       setIsDirty(true);
+      setSaveMessage('Wallet auto-detection is still a placeholder. Enter the real wallet address manually for now.');
     }
   };
 
@@ -147,12 +130,12 @@ export default function SettingsPage() {
   };
 
   const handleRiskChange = (field: string, value: number) => {
-    setRiskSettings(prev => ({ ...prev, [field]: value }));
+    setRiskSettings((prev) => ({ ...prev, [field]: value }));
     setIsDirty(true);
   };
 
   const handleStrategyChange = (strategyName: string, field: string, value: any) => {
-    setStrategies(prev => ({
+    setStrategies((prev) => ({
       ...prev,
       [strategyName]: {
         ...prev[strategyName],
@@ -163,7 +146,7 @@ export default function SettingsPage() {
   };
 
   const handleStrategyParamChange = (strategyName: string, paramName: string, value: any) => {
-    setStrategies(prev => ({
+    setStrategies((prev) => ({
       ...prev,
       [strategyName]: {
         ...prev[strategyName],
@@ -177,46 +160,55 @@ export default function SettingsPage() {
   };
 
   const handleTradingPrefChange = (field: string, value: any) => {
-    setTradingPrefs(prev => ({ ...prev, [field]: value }));
+    setTradingPrefs((prev) => ({ ...prev, [field]: value }));
     setIsDirty(true);
   };
 
   const saveSettings = async () => {
     setIsSaving(true);
+    setSaveMessage(null);
     try {
-      // Save to store
-      if (store?.updateSettings) {
-        store.updateSettings({
-          apiKeys,
-          network,
-          riskSettings,
-          strategies,
-          tradingPrefs,
-        });
-      }
+      store.updateSettings({
+        apiKeys,
+        network,
+        riskSettings,
+        strategies,
+        tradingPrefs,
+      });
+      store.saveSettings();
 
-      // Save to server
       const response = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          apiKeys: { ...apiKeys, openai: apiKeys.openai ? '***' : '', hyperliquid: apiKeys.hyperliquid ? '***' : '', openrouter: apiKeys.openrouter ? '***' : '' },
-          network,
-          riskSettings,
-          strategies,
-          tradingPrefs,
+          riskParams: {
+            maxPositionSize: riskSettings.maxPositionSize,
+            dailyLossLimit: riskSettings.maxDailyLoss,
+            maxLeverage: riskSettings.maxLeverage,
+            stopLossRequired: true,
+          },
+          strategyConfigs: Object.entries(strategies).map(([name, cfg]) => ({
+            name,
+            enabled: cfg.enabled,
+            parameters: { ...cfg.params, weight: cfg.weight },
+          })),
+          uiPreferences: {
+            chartTimeframe: '1h',
+            refreshInterval: tradingPrefs.analysisInterval * 1000,
+            theme: 'dark',
+          },
         }),
       });
 
       if (response.ok) {
         setIsDirty(false);
-        // Show success toast
-        console.log('Settings saved successfully');
+        setSaveMessage('Settings saved locally and validated against the server route.');
       } else {
-        console.error('Failed to save settings');
+        setSaveMessage('Settings saved locally, but server validation failed.');
       }
     } catch (error) {
       console.error('Error saving settings:', error);
+      setSaveMessage('Settings saved locally, but remote validation errored.');
     } finally {
       setIsSaving(false);
     }
@@ -243,10 +235,8 @@ export default function SettingsPage() {
 
   const resetData = () => {
     if (window.confirm('Are you sure you want to reset all learning data? This cannot be undone.')) {
-      if (store?.resetLearningData) {
-        store.resetLearningData();
-      }
-      console.log('Learning data reset');
+      store.resetLearningData();
+      setSaveMessage('Learning data reset locally.');
     }
   };
 
@@ -267,7 +257,7 @@ export default function SettingsPage() {
     helper,
     showToggle = false,
     onToggle = null,
-    isVisible = false
+    isVisible = false,
   }: any) => (
     <div className="mb-4">
       <label className="block text-sm font-medium text-gray-300 mb-2">{label}</label>
@@ -316,7 +306,6 @@ export default function SettingsPage() {
   return (
     <DashboardLayout>
       <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-white mb-2">Settings</h1>
           <p className="text-gray-400">Configure your trading preferences, API keys, and strategies</p>
@@ -326,9 +315,9 @@ export default function SettingsPage() {
               You have unsaved changes
             </div>
           )}
+          {saveMessage && <div className="mt-2 text-sm text-blue-300">{saveMessage}</div>}
         </div>
 
-        {/* Network Warning */}
         {showNetworkWarning && (
           <div className="mb-6 p-4 bg-orange-900 border border-orange-700 rounded-lg flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" />
@@ -345,7 +334,6 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {/* API Keys Configuration */}
         <Card className="mb-6">
           <div className="flex items-center gap-2 mb-6 pb-4 border-b border-gray-700">
             <Key className="w-6 h-6 text-blue-400" />
@@ -353,13 +341,12 @@ export default function SettingsPage() {
           </div>
 
           <div className="space-y-6">
-            {/* OpenAI API Key */}
             <div className="pb-4 border-b border-gray-800">
               <InputField
                 label="OpenAI API Key"
                 type="password"
                 value={apiKeys.openai}
-                onChange={(value) => handleKeyChange('openai', value)}
+                onChange={(value: string) => handleKeyChange('openai', value)}
                 helper="Required for AI-powered analysis"
                 showToggle={true}
                 isVisible={showKeys.openai}
@@ -367,47 +354,45 @@ export default function SettingsPage() {
               />
               <div className="flex gap-2 items-center">
                 <button
-                  onClick={() => testConnection('openai')}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition flex items-center gap-2"
+                  onClick={() => markTestUntested('openai')}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition flex items-center gap-2"
                 >
-                  <RefreshCw className="w-4 h-4" />
-                  Test Connection
+                  <AlertTriangle className="w-4 h-4" />
+                  Test not wired yet
                 </button>
                 <StatusIcon status={apiStatus.openai} />
               </div>
             </div>
 
-            {/* Hyperliquid Private Key */}
             <div className="pb-4 border-b border-gray-800">
               <InputField
                 label="Hyperliquid Private Key"
                 type="password"
                 value={apiKeys.hyperliquid}
-                onChange={(value) => handleKeyChange('hyperliquid', value)}
-                helper="Your private key is stored locally and never sent to any server except Hyperliquid"
+                onChange={(value: string) => handleKeyChange('hyperliquid', value)}
+                helper="Stored locally in browser persistence for now"
                 showToggle={true}
                 isVisible={showKeys.hyperliquid}
                 onToggle={() => toggleKeyVisibility('hyperliquid')}
               />
               <div className="flex gap-2 items-center">
                 <button
-                  onClick={() => testConnection('hyperliquid')}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition flex items-center gap-2"
+                  onClick={() => markTestUntested('hyperliquid')}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition flex items-center gap-2"
                 >
-                  <RefreshCw className="w-4 h-4" />
-                  Test Connection
+                  <AlertTriangle className="w-4 h-4" />
+                  Test not wired yet
                 </button>
                 <StatusIcon status={apiStatus.hyperliquid} />
               </div>
             </div>
 
-            {/* Wallet Address */}
             <div className="pb-4 border-b border-gray-800">
               <InputField
                 label="Hyperliquid Wallet Address"
                 type="text"
                 value={apiKeys.walletAddress}
-                onChange={(value) => handleKeyChange('walletAddress', value)}
+                onChange={(value: string) => handleKeyChange('walletAddress', value)}
                 helper="Should be in format: 0x..."
               />
               <button
@@ -418,13 +403,12 @@ export default function SettingsPage() {
               </button>
             </div>
 
-            {/* OpenRouter API Key */}
             <div className="pb-4">
               <InputField
                 label="OpenRouter API Key (Optional)"
                 type="password"
                 value={apiKeys.openrouter}
-                onChange={(value) => handleKeyChange('openrouter', value)}
+                onChange={(value: string) => handleKeyChange('openrouter', value)}
                 helper="Optional - for alternative AI models"
                 showToggle={true}
                 isVisible={showKeys.openrouter}
@@ -432,21 +416,20 @@ export default function SettingsPage() {
               />
               <div className="flex gap-2 items-center">
                 <button
-                  onClick={() => testConnection('openrouter')}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition flex items-center gap-2"
+                  onClick={() => markTestUntested('openrouter')}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition flex items-center gap-2"
                 >
-                  <RefreshCw className="w-4 h-4" />
-                  Test Connection
+                  <AlertTriangle className="w-4 h-4" />
+                  Test not wired yet
                 </button>
                 <StatusIcon status={apiStatus.openrouter} />
               </div>
             </div>
 
-            {/* Network Toggle */}
             <div className="pt-4 border-t border-gray-800">
               <label className="block text-sm font-medium text-gray-300 mb-3">Network</label>
               <div className="flex gap-4">
-                {(['testnet', 'mainnet'] as const).map(net => (
+                {(['testnet', 'mainnet'] as const).map((net) => (
                   <button
                     key={net}
                     onClick={() => handleNetworkChange(net)}
@@ -467,7 +450,6 @@ export default function SettingsPage() {
           </div>
         </Card>
 
-        {/* Risk Management Settings */}
         <Card className="mb-6">
           <div className="flex items-center gap-2 mb-6 pb-4 border-b border-gray-700">
             <Shield className="w-6 h-6 text-red-400" />
@@ -475,63 +457,15 @@ export default function SettingsPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <SliderInput
-              label="Max Position Size"
-              value={riskSettings.maxPositionSize}
-              onChange={(value) => handleRiskChange('maxPositionSize', value)}
-              min={100}
-              max={100000}
-              step={100}
-              unit=" USD"
-            />
-            <SliderInput
-              label="Max Leverage"
-              value={riskSettings.maxLeverage}
-              onChange={(value) => handleRiskChange('maxLeverage', value)}
-              min={1}
-              max={50}
-              step={1}
-              unit="x"
-            />
-            <SliderInput
-              label="Stop Loss Default"
-              value={riskSettings.stopLossDefault}
-              onChange={(value) => handleRiskChange('stopLossDefault', value)}
-              min={0.1}
-              max={20}
-              step={0.1}
-              unit="%"
-            />
-            <SliderInput
-              label="Take Profit Default"
-              value={riskSettings.takeProfitDefault}
-              onChange={(value) => handleRiskChange('takeProfitDefault', value)}
-              min={0.1}
-              max={50}
-              step={0.1}
-              unit="%"
-            />
-            <SliderInput
-              label="Max Daily Loss"
-              value={riskSettings.maxDailyLoss}
-              onChange={(value) => handleRiskChange('maxDailyLoss', value)}
-              min={100}
-              max={50000}
-              step={100}
-              unit=" USD"
-            />
-            <SliderInput
-              label="Max Open Positions"
-              value={riskSettings.maxOpenPositions}
-              onChange={(value) => handleRiskChange('maxOpenPositions', value)}
-              min={1}
-              max={20}
-              step={1}
-            />
+            <SliderInput label="Max Position Size" value={riskSettings.maxPositionSize} onChange={(value: number) => handleRiskChange('maxPositionSize', value)} min={100} max={100000} step={100} unit=" USD" />
+            <SliderInput label="Max Leverage" value={riskSettings.maxLeverage} onChange={(value: number) => handleRiskChange('maxLeverage', value)} min={1} max={50} step={1} unit="x" />
+            <SliderInput label="Stop Loss Default" value={riskSettings.stopLossDefault} onChange={(value: number) => handleRiskChange('stopLossDefault', value)} min={0.1} max={20} step={0.1} unit="%" />
+            <SliderInput label="Take Profit Default" value={riskSettings.takeProfitDefault} onChange={(value: number) => handleRiskChange('takeProfitDefault', value)} min={0.1} max={50} step={0.1} unit="%" />
+            <SliderInput label="Max Daily Loss" value={riskSettings.maxDailyLoss} onChange={(value: number) => handleRiskChange('maxDailyLoss', value)} min={100} max={50000} step={100} unit=" USD" />
+            <SliderInput label="Max Open Positions" value={riskSettings.maxOpenPositions} onChange={(value: number) => handleRiskChange('maxOpenPositions', value)} min={1} max={20} step={1} />
           </div>
         </Card>
 
-        {/* Strategy Configuration */}
         <Card className="mb-6">
           <div className="flex items-center gap-2 mb-6 pb-4 border-b border-gray-700">
             <Sliders className="w-6 h-6 text-purple-400" />
@@ -539,7 +473,7 @@ export default function SettingsPage() {
           </div>
 
           <div className="space-y-4">
-            {STRATEGIES.map(strategy => (
+            {STRATEGIES.map((strategy) => (
               <div key={strategy} className="bg-gray-900 border border-gray-800 rounded-lg p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3 flex-1">
@@ -559,158 +493,21 @@ export default function SettingsPage() {
                   </button>
                 </div>
 
-                <SliderInput
-                  label="Weight"
-                  value={strategies[strategy].weight}
-                  onChange={(value) => handleStrategyChange(strategy, 'weight', value)}
-                  min={0}
-                  max={100}
-                  step={1}
-                  unit="%"
-                />
+                <SliderInput label="Weight" value={strategies[strategy].weight} onChange={(value: number) => handleStrategyChange(strategy, 'weight', value)} min={0} max={100} step={1} unit="%" />
 
                 {expandedStrategy === strategy && (
                   <div className="mt-4 pt-4 border-t border-gray-700 space-y-3">
-                    {strategy === 'RSI' && (
-                      <>
-                        <SliderInput
-                          label="Period"
-                          value={strategies[strategy].params.period}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'period', value)}
-                          min={5}
-                          max={50}
-                          step={1}
-                        />
-                        <SliderInput
-                          label="Overbought Level"
-                          value={strategies[strategy].params.overbought}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'overbought', value)}
-                          min={50}
-                          max={100}
-                          step={1}
-                        />
-                        <SliderInput
-                          label="Oversold Level"
-                          value={strategies[strategy].params.oversold}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'oversold', value)}
-                          min={0}
-                          max={50}
-                          step={1}
-                        />
-                      </>
-                    )}
-                    {strategy === 'MACD' && (
-                      <>
-                        <SliderInput
-                          label="Fast Period"
-                          value={strategies[strategy].params.fastPeriod}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'fastPeriod', value)}
-                          min={5}
-                          max={30}
-                          step={1}
-                        />
-                        <SliderInput
-                          label="Slow Period"
-                          value={strategies[strategy].params.slowPeriod}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'slowPeriod', value)}
-                          min={20}
-                          max={50}
-                          step={1}
-                        />
-                        <SliderInput
-                          label="Signal Period"
-                          value={strategies[strategy].params.signalPeriod}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'signalPeriod', value)}
-                          min={5}
-                          max={20}
-                          step={1}
-                        />
-                      </>
-                    )}
-                    {strategy === 'Bollinger' && (
-                      <>
-                        <SliderInput
-                          label="Period"
-                          value={strategies[strategy].params.period}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'period', value)}
-                          min={10}
-                          max={50}
-                          step={1}
-                        />
-                        <SliderInput
-                          label="Standard Deviations"
-                          value={strategies[strategy].params.stdDev}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'stdDev', value)}
-                          min={1}
-                          max={5}
-                          step={0.5}
-                        />
-                      </>
-                    )}
-                    {strategy === 'MA Crossover' && (
-                      <>
-                        <SliderInput
-                          label="Short Period"
-                          value={strategies[strategy].params.shortPeriod}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'shortPeriod', value)}
-                          min={5}
-                          max={50}
-                          step={1}
-                        />
-                        <SliderInput
-                          label="Long Period"
-                          value={strategies[strategy].params.longPeriod}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'longPeriod', value)}
-                          min={50}
-                          max={200}
-                          step={1}
-                        />
-                      </>
-                    )}
-                    {strategy === 'Volume' && (
-                      <>
-                        <SliderInput
-                          label="Average Period"
-                          value={strategies[strategy].params.avgPeriod}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'avgPeriod', value)}
-                          min={10}
-                          max={50}
-                          step={1}
-                        />
-                        <SliderInput
-                          label="Spike Multiplier"
-                          value={strategies[strategy].params.spikeMultiplier}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'spikeMultiplier', value)}
-                          min={1}
-                          max={5}
-                          step={0.1}
-                        />
-                      </>
-                    )}
-                    {strategy === 'AI Sentiment' && (
-                      <>
-                        <div className="mb-4">
-                          <label className="block text-sm font-medium text-gray-300 mb-2">Model</label>
-                          <select
-                            value={strategies[strategy].params.model}
-                            onChange={(e) => handleStrategyParamChange(strategy, 'model', e.target.value)}
-                            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white focus:outline-none focus:border-blue-500 transition"
-                          >
-                            <option>gpt-3.5-turbo</option>
-                            <option>gpt-4</option>
-                            <option>claude-3-opus</option>
-                          </select>
-                        </div>
-                        <SliderInput
-                          label="Temperature"
-                          value={strategies[strategy].params.temperature}
-                          onChange={(value) => handleStrategyParamChange(strategy, 'temperature', value)}
-                          min={0}
-                          max={2}
-                          step={0.1}
-                        />
-                      </>
-                    )}
+                    {Object.entries(strategies[strategy].params).map(([paramName, paramValue]) => (
+                      <SliderInput
+                        key={paramName}
+                        label={paramName}
+                        value={Number(paramValue)}
+                        onChange={(value: number) => handleStrategyParamChange(strategy, paramName, value)}
+                        min={0}
+                        max={typeof paramValue === 'number' && paramValue > 20 ? 200 : 100}
+                        step={0.1}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
@@ -718,7 +515,6 @@ export default function SettingsPage() {
           </div>
         </Card>
 
-        {/* Trading Preferences */}
         <Card className="mb-6">
           <div className="flex items-center gap-2 mb-6 pb-4 border-b border-gray-700">
             <Sliders className="w-6 h-6 text-cyan-400" />
@@ -729,7 +525,7 @@ export default function SettingsPage() {
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">Default Order Type</label>
               <div className="flex gap-4">
-                {['limit', 'market'].map(type => (
+                {['limit', 'market'].map((type) => (
                   <button
                     key={type}
                     onClick={() => handleTradingPrefChange('orderType', type)}
@@ -759,49 +555,13 @@ export default function SettingsPage() {
               </select>
             </div>
 
-            <SliderInput
-              label="Minimum Signal Strength to Trade"
-              value={tradingPrefs.minSignalStrength}
-              onChange={(value) => handleTradingPrefChange('minSignalStrength', value)}
-              min={0}
-              max={100}
-              step={1}
-              unit="%"
-            />
-
-            <SliderInput
-              label="Minimum Confidence to Trade"
-              value={tradingPrefs.minConfidence}
-              onChange={(value) => handleTradingPrefChange('minConfidence', value)}
-              min={0}
-              max={100}
-              step={1}
-              unit="%"
-            />
-
-            <SliderInput
-              label="Analysis Interval"
-              value={tradingPrefs.analysisInterval}
-              onChange={(value) => handleTradingPrefChange('analysisInterval', value)}
-              min={10}
-              max={300}
-              step={10}
-              unit=" seconds"
-            />
-
-            <SliderInput
-              label="Trade Cooldown Period"
-              value={tradingPrefs.tradeCooldown}
-              onChange={(value) => handleTradingPrefChange('tradeCooldown', value)}
-              min={5}
-              max={300}
-              step={5}
-              unit=" seconds"
-            />
+            <SliderInput label="Minimum Signal Strength to Trade" value={tradingPrefs.minSignalStrength} onChange={(value: number) => handleTradingPrefChange('minSignalStrength', value)} min={0} max={100} step={1} unit="%" />
+            <SliderInput label="Minimum Confidence to Trade" value={tradingPrefs.minConfidence} onChange={(value: number) => handleTradingPrefChange('minConfidence', value)} min={0} max={100} step={1} unit="%" />
+            <SliderInput label="Analysis Interval" value={tradingPrefs.analysisInterval} onChange={(value: number) => handleTradingPrefChange('analysisInterval', value)} min={10} max={300} step={10} unit=" seconds" />
+            <SliderInput label="Trade Cooldown Period" value={tradingPrefs.tradeCooldown} onChange={(value: number) => handleTradingPrefChange('tradeCooldown', value)} min={5} max={300} step={5} unit=" seconds" />
           </div>
         </Card>
 
-        {/* Data & Intelligence */}
         <Card className="mb-6">
           <div className="flex items-center gap-2 mb-6 pb-4 border-b border-gray-700">
             <Shield className="w-6 h-6 text-teal-400" />
@@ -817,14 +577,6 @@ export default function SettingsPage() {
                 <Save className="w-5 h-5" />
                 Export Intelligence Data
               </button>
-              <button
-                onClick={() => document.getElementById('importInput')?.click()}
-                className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition flex items-center justify-center gap-2"
-              >
-                <Save className="w-5 h-5" />
-                Import Intelligence Data
-              </button>
-              <input id="importInput" type="file" accept=".json" className="hidden" />
             </div>
 
             <button
@@ -833,20 +585,9 @@ export default function SettingsPage() {
             >
               Reset Learning Data
             </button>
-
-            <SliderInput
-              label="Data Retention Period"
-              value={90}
-              onChange={() => {}}
-              min={7}
-              max={365}
-              step={1}
-              unit=" days"
-            />
           </div>
         </Card>
 
-        {/* Save Button */}
         <div className="flex justify-end gap-4 mb-6">
           <button
             onClick={() => window.location.reload()}

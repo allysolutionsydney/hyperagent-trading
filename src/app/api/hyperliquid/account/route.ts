@@ -7,6 +7,7 @@ export async function GET(request: NextRequest) {
     const action = searchParams.get('action');
     const wallet = searchParams.get('wallet');
     const privateKey = searchParams.get('privateKey');
+    const isTestnet = searchParams.get('testnet') === 'true';
 
     if (!action) {
       return NextResponse.json(
@@ -23,36 +24,25 @@ export async function GET(request: NextRequest) {
     }
 
     const client = new HyperliquidClient({
-      wallet,
+      walletAddress: wallet,
       privateKey: privateKey || undefined,
-      testnet: searchParams.get('testnet') === 'true',
+      isTestnet,
     });
 
     switch (action) {
       case 'state': {
-        const state = await client.getAccountState(wallet);
+        const state = await client.getAccountState();
         return NextResponse.json({ data: state });
       }
 
       case 'orders': {
-        if (!privateKey) {
-          return NextResponse.json(
-            { error: 'Missing required parameter: privateKey for orders action' },
-            { status: 400 }
-          );
-        }
-        const orders = await client.getOpenOrders(wallet);
+        const orders = await client.getOpenOrders();
         return NextResponse.json({ data: orders });
       }
 
       case 'fills': {
-        if (!privateKey) {
-          return NextResponse.json(
-            { error: 'Missing required parameter: privateKey for fills action' },
-            { status: 400 }
-          );
-        }
-        const fills = await client.getUserFills(wallet);
+        const coin = searchParams.get('coin') || undefined;
+        const fills = await client.getUserFills(coin);
         return NextResponse.json({ data: fills });
       }
 

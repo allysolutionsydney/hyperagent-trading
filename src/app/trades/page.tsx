@@ -4,110 +4,19 @@ import DashboardLayout from '@/components/DashboardLayout';
 import Card from '@/components/Card';
 import { useStore } from '@/hooks/useStore';
 import {
-  Plus,
-  Minus,
-  X,
-  MoreVertical,
   ArrowUpRight,
   ArrowDownLeft,
   TrendingUp,
-  TrendingDown,
   Download,
-  ChevronDown,
-  Lock,
+  AlertCircle,
+  CheckCircle,
 } from 'lucide-react';
 import { useState } from 'react';
-
-const ACTIVE_POSITIONS = [
-  {
-    id: '1',
-    coin: 'BTC',
-    direction: 'Long',
-    size: 0.5,
-    entryPrice: 45230,
-    markPrice: 46850,
-    pnl: 810,
-    pnlPercent: 3.57,
-    margin: 4623,
-    liquidationPrice: 38420,
-  },
-  {
-    id: '2',
-    coin: 'ETH',
-    direction: 'Long',
-    size: 5.0,
-    entryPrice: 2450,
-    markPrice: 2580,
-    pnl: 650,
-    pnlPercent: 5.31,
-    margin: 2450,
-    liquidationPrice: 1960,
-  },
-  {
-    id: '3',
-    coin: 'SOL',
-    direction: 'Short',
-    size: 20.0,
-    entryPrice: 145,
-    markPrice: 142.5,
-    pnl: 50,
-    pnlPercent: 1.72,
-    margin: 1450,
-    liquidationPrice: 165,
-  },
-];
-
-const OPEN_ORDERS = [
-  {
-    id: '1',
-    coin: 'BTC',
-    type: 'Limit',
-    side: 'Buy',
-    size: 0.25,
-    price: 45000,
-    status: 'Pending',
-    created: '2 mins ago',
-  },
-  {
-    id: '2',
-    coin: 'ETH',
-    type: 'Limit',
-    side: 'Sell',
-    size: 2.0,
-    price: 2750,
-    status: 'Pending',
-    created: '15 mins ago',
-  },
-];
-
-const TRADE_HISTORY = [
-  {
-    id: '1',
-    date: '2024-03-28 14:32',
-    coin: 'BTC',
-    side: 'Buy',
-    size: 0.5,
-    entry: 45230,
-    exit: 46850,
-    pnl: 810,
-    strategy: 'MACD Crossover',
-  },
-  {
-    id: '2',
-    date: '2024-03-27 11:15',
-    coin: 'ETH',
-    side: 'Sell',
-    size: 3.0,
-    entry: 2600,
-    exit: 2450,
-    pnl: 450,
-    strategy: 'RSI Divergence',
-  },
-];
+import { formatPrice, formatUSD, formatTimestamp } from '@/utils/format';
 
 interface OrderFormState {
   coin: string;
-  orderType: 'market' | 'limit' | 'stop-limit';
+  orderType: 'market' | 'limit';
   direction: 'long' | 'short';
   size: number;
   price: number;
@@ -120,282 +29,278 @@ interface OrderFormState {
 
 export default function TradesPage() {
   const store = useStore();
+  const [message, setMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [orderForm, setOrderForm] = useState<OrderFormState>({
-    coin: 'BTC',
-    orderType: 'market',
+    coin: store.selectedCoin || 'BTC',
+    orderType: 'limit',
     direction: 'long',
-    size: 0.1,
-    price: 46850,
-    leverage: 2,
+    size: 0.01,
+    price: store.candles[store.candles.length - 1]?.close || 0,
+    leverage: 1,
     stopLoss: 0,
     stopLossEnabled: false,
     takeProfit: 0,
     takeProfitEnabled: false,
   });
 
-  const totalPnL = ACTIVE_POSITIONS.reduce((acc, p) => acc + p.pnl, 0);
+  const currentPrice = store.candles[store.candles.length - 1]?.close || orderForm.price || 0;
+  const positions = store.positions || [];
+  const recentTrades = store.recentTrades || [];
+  const openOrders = store.openOrders || [];
+  const totalPnL = positions.reduce((acc: number, p: any) => acc + Number(p.pnl || p.unrealizedPnl || p.unrealizedPnL || 0), 0);
 
-  const estimatedCost = orderForm.size * orderForm.price;
+  const estimatedCost = orderForm.size * (orderForm.orderType === 'market' ? currentPrice : orderForm.price || currentPrice);
   const fees = estimatedCost * 0.0005;
-  const totalCost = (estimatedCost + fees) / orderForm.leverage;
+  const totalCost = (estimatedCost + fees) / Math.max(orderForm.leverage, 1);
   const liquidationPrice =
     orderForm.direction === 'long'
-      ? orderForm.price * 0.8
-      : orderForm.price * 1.2;
+      ? (orderForm.price || currentPrice) * 0.8
+      : (orderForm.price || currentPrice) * 1.2;
 
   const setSizePercent = (percent: number) => {
-    const maxSize = 10; // Mock max position size
+    const maxSizeNotional = Math.max(store.riskSettings.maxPositionSize, 1);
+    const basisPrice = orderForm.orderType === 'market' ? currentPrice : orderForm.price || currentPrice || 1;
     setOrderForm((prev) => ({
       ...prev,
-      size: (maxSize * percent) / 100,
+      size: Number(((maxSizeNotional * percent) / 100 / basisPrice).toFixed(6)),
     }));
+  };
+
+  const handlePlaceOrder = async () => {
+    if (!store.apiKeys.hyperliquidPrivateKey || !store.apiKeys.hyperliquidWallet) {
+      setMessage('Hyperliquid credentials are missing. Add them in Settings first.');
+      return;
+    }
+
+    const executionPrice = orderForm.orderType === 'market' ? currentPrice : orderForm.price;
+    if (!executionPrice || !orderForm.size) {
+      setMessage('Order price and size must be valid before submitting.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setMessage(null);
+    try {
+      const response = await fetch('/api/trades', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'place',
+          wallet: store.apiKeys.hyperliquidWallet,
+          privateKey: store.apiKeys.hyperliquidPrivateKey,
+          isTestnet: store.isTestnet,
+          riskConfig: {
+            maxPositionSize: store.riskSettings.maxPositionSize,
+            maxLeverage: orderForm.leverage,
+            stopLossRequired: orderForm.stopLossEnabled,
+          },
+          coin: orderForm.coin,
+          isBuy: orderForm.direction === 'long',
+          size: orderForm.size,
+          price: executionPrice,
+          orderType: orderForm.orderType === 'market' ? 'Limit' : 'Limit',
+          reduceOnly: false,
+          stopLoss: orderForm.stopLossEnabled ? orderForm.stopLoss : undefined,
+          leverage: orderForm.leverage,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Order placement failed');
+      }
+
+      setMessage('Order submitted to /api/trades successfully. Review exchange response in logs/account state.');
+      store.addTrade({
+        id: `${Date.now()}`,
+        coin: orderForm.coin,
+        direction: orderForm.direction === 'long' ? 'LONG' : 'SHORT',
+        entryPrice: executionPrice,
+        stopLoss: orderForm.stopLossEnabled ? orderForm.stopLoss : 0,
+        takeProfits: orderForm.takeProfitEnabled ? [orderForm.takeProfit] : [],
+        size: orderForm.size,
+        leverage: orderForm.leverage,
+        thesis: 'Manual order from Trades page',
+        strategySignals: [],
+        status: 'open',
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      console.error('Order placement failed:', err);
+      setMessage(err instanceof Error ? err.message : 'Order placement failed');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const exportTrades = () => {
+    const data = JSON.stringify(recentTrades, null, 2);
+    const element = document.createElement('a');
+    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(data));
+    element.setAttribute('download', `trade-history-${Date.now()}.json`);
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
   };
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header */}
         <div>
           <h1 className="text-3xl font-bold text-white">Trade Management</h1>
-          <p className="text-gray-400 mt-1">Manage positions, place orders, and track trades</p>
+          <p className="text-gray-400 mt-1">Real store-backed trades and honest order controls</p>
+          {message && <p className="text-sm text-blue-300 mt-2">{message}</p>}
         </div>
 
-        {/* Active Positions Section */}
+        {!store.apiKeys.hyperliquidPrivateKey || !store.apiKeys.hyperliquidWallet ? (
+          <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-sm text-yellow-300 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 mt-0.5" />
+            <span>Hyperliquid credentials are not configured, so trade submission is disabled until Settings are completed.</span>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-green-500/30 bg-green-500/5 px-4 py-3 text-sm text-green-300 flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 mt-0.5" />
+            <span>Credentials present. Trades page can submit to the real `/api/trades` route.</span>
+          </div>
+        )}
+
         <Card>
           <div className="p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-white">Active Positions</h2>
-              <button className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium transition-colors">
-                Close All
-              </button>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-700">
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Coin
-                    </th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Direction
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Size
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Entry Price
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Mark Price
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      PnL ($)
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      PnL (%)
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Margin
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Liq. Price
-                    </th>
-                    <th className="text-center py-3 px-4 text-gray-400 font-medium">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ACTIVE_POSITIONS.map((pos) => (
-                    <tr
-                      key={pos.id}
-                      className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors"
-                    >
-                      <td className="py-3 px-4 text-white font-semibold">{pos.coin}</td>
-                      <td className="py-3 px-4">
-                        <span
-                          className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 w-fit ${
-                            pos.direction === 'Long'
-                              ? 'bg-green-500/20 text-green-400'
-                              : 'bg-red-500/20 text-red-400'
-                          }`}
-                        >
-                          {pos.direction === 'Long' ? (
-                            <ArrowUpRight className="w-3 h-3" />
-                          ) : (
-                            <ArrowDownLeft className="w-3 h-3" />
-                          )}
-                          {pos.direction}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-right text-white">
-                        {pos.size.toFixed(2)}
-                      </td>
-                      <td className="py-3 px-4 text-right text-white">
-                        ${pos.entryPrice.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-right text-white">
-                        ${pos.markPrice.toLocaleString()}
-                      </td>
-                      <td className={`py-3 px-4 text-right font-medium ${
-                        pos.pnl >= 0 ? 'text-green-400' : 'text-red-400'
-                      }`}>
-                        {pos.pnl >= 0 ? '+' : ''} ${pos.pnl.toLocaleString()}
-                      </td>
-                      <td className={`py-3 px-4 text-right font-medium ${
-                        pos.pnlPercent >= 0 ? 'text-green-400' : 'text-red-400'
-                      }`}>
-                        {pos.pnlPercent >= 0 ? '+' : ''}{pos.pnlPercent.toFixed(2)}%
-                      </td>
-                      <td className="py-3 px-4 text-right text-white">
-                        ${pos.margin.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-right text-yellow-400">
-                        ${pos.liquidationPrice.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          <button className="p-1 hover:bg-gray-700 rounded transition-colors"
-                            title="Close Position">
-                            <X className="w-4 h-4 text-red-400" />
-                          </button>
-                          <button className="p-1 hover:bg-gray-700 rounded transition-colors"
-                            title="Add to Position">
-                            <Plus className="w-4 h-4 text-green-400" />
-                          </button>
-                          <button className="p-1 hover:bg-gray-700 rounded transition-colors"
-                            title="Reduce Position">
-                            <Minus className="w-4 h-4 text-yellow-400" />
-                          </button>
-                        </div>
-                      </td>
+            {positions.length === 0 ? (
+              <div className="text-sm text-gray-400">No live positions loaded into store yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-700">
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Coin</th>
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Direction</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Size</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Entry</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">PnL</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {positions.map((pos: any, idx: number) => {
+                      const pnl = Number(pos.pnl || pos.unrealizedPnl || pos.unrealizedPnL || 0);
+                      const direction = pos.direction || (Number(pos.szi || 0) >= 0 ? 'Long' : 'Short');
+                      const size = pos.size || pos.szi || 0;
+                      const entry = pos.entryPrice || pos.entryPx || pos.entry || 0;
+                      const coin = pos.coin || pos.asset || `Position ${idx + 1}`;
 
-            {/* PnL Summary */}
+                      return (
+                        <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors">
+                          <td className="py-3 px-4 text-white font-semibold">{coin}</td>
+                          <td className="py-3 px-4">
+                            <span className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 w-fit ${
+                              String(direction).toLowerCase().includes('long')
+                                ? 'bg-green-500/20 text-green-400'
+                                : 'bg-red-500/20 text-red-400'
+                            }`}>
+                              {String(direction).toLowerCase().includes('long') ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownLeft className="w-3 h-3" />}
+                              {direction}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right text-white">{Number(size).toFixed(4)}</td>
+                          <td className="py-3 px-4 text-right text-white">{entry ? formatPrice(Number(entry)) : '—'}</td>
+                          <td className={`py-3 px-4 text-right font-medium ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {formatUSD(pnl)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
             <div className="mt-6 pt-6 border-t border-gray-700 flex justify-end">
               <div className="text-right">
                 <p className="text-gray-400 text-sm mb-1">Total PnL</p>
-                <p className={`text-3xl font-bold ${
-                  totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
-                }`}>
-                  {totalPnL >= 0 ? '+' : ''}${totalPnL.toLocaleString()}
-                </p>
+                <p className={`text-3xl font-bold ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatUSD(totalPnL)}</p>
               </div>
             </div>
           </div>
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* New Order Form */}
           <div className="lg:col-span-2">
             <Card>
               <div className="p-6">
                 <h2 className="text-lg font-semibold text-white mb-6">New Order</h2>
 
                 <div className="space-y-6">
-                  {/* Coin Selector */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Coin
-                    </label>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Coin</label>
                     <select
                       value={orderForm.coin}
-                      onChange={(e) =>
-                        setOrderForm((prev) => ({ ...prev, coin: e.target.value }))
-                      }
+                      onChange={(e) => setOrderForm((prev) => ({ ...prev, coin: e.target.value }))}
                       className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
                     >
-                      <option>BTC</option>
-                      <option>ETH</option>
-                      <option>SOL</option>
-                      <option>ARB</option>
+                      {['BTC', 'ETH', 'SOL', 'DOGE', 'ARB', 'OP'].map((coin) => (
+                        <option key={coin}>{coin}</option>
+                      ))}
                     </select>
                   </div>
 
-                  {/* Order Type */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Order Type
-                    </label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(['market', 'limit', 'stop-limit'] as const).map((type) => (
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Order Type</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['market', 'limit'] as const).map((type) => (
                         <button
                           key={type}
-                          onClick={() =>
-                            setOrderForm((prev) => ({ ...prev, orderType: type }))
-                          }
+                          onClick={() => setOrderForm((prev) => ({ ...prev, orderType: type }))}
                           className={`py-2 rounded-lg font-medium transition-colors ${
                             orderForm.orderType === type
                               ? 'bg-blue-600 text-white'
                               : 'bg-gray-800 border border-gray-700 text-gray-300 hover:border-blue-500'
                           }`}
                         >
-                          {type.charAt(0).toUpperCase() +
-                            type
-                              .slice(1)
-                              .replace('-', ' ')
-                              .toLowerCase()}
+                          {type.charAt(0).toUpperCase() + type.slice(1)}
                         </button>
                       ))}
                     </div>
                   </div>
 
-                  {/* Direction */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Direction
-                    </label>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Direction</label>
                     <div className="grid grid-cols-2 gap-2">
                       <button
-                        onClick={() =>
-                          setOrderForm((prev) => ({ ...prev, direction: 'long' }))
-                        }
+                        onClick={() => setOrderForm((prev) => ({ ...prev, direction: 'long' }))}
                         className={`py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
                           orderForm.direction === 'long'
                             ? 'bg-green-600 text-white'
                             : 'bg-gray-800 border border-gray-700 text-gray-300 hover:border-green-500'
                         }`}
                       >
-                        <ArrowUpRight className="w-4 h-4" />
-                        Long
+                        <ArrowUpRight className="w-4 h-4" /> Long
                       </button>
                       <button
-                        onClick={() =>
-                          setOrderForm((prev) => ({ ...prev, direction: 'short' }))
-                        }
+                        onClick={() => setOrderForm((prev) => ({ ...prev, direction: 'short' }))}
                         className={`py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
                           orderForm.direction === 'short'
                             ? 'bg-red-600 text-white'
                             : 'bg-gray-800 border border-gray-700 text-gray-300 hover:border-red-500'
                         }`}
                       >
-                        <ArrowDownLeft className="w-4 h-4" />
-                        Short
+                        <ArrowDownLeft className="w-4 h-4" /> Short
                       </button>
                     </div>
                   </div>
 
-                  {/* Size */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Size
-                    </label>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Size</label>
                     <input
                       type="number"
                       value={orderForm.size}
-                      onChange={(e) =>
-                        setOrderForm((prev) => ({
-                          ...prev,
-                          size: parseFloat(e.target.value),
-                        }))
-                      }
+                      onChange={(e) => setOrderForm((prev) => ({ ...prev, size: parseFloat(e.target.value || '0') }))}
                       className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-blue-500 focus:outline-none mb-2"
-                      placeholder="0.0"
                     />
                     <div className="grid grid-cols-4 gap-2">
                       {[25, 50, 75, 100].map((percent) => (
@@ -410,370 +315,194 @@ export default function TradesPage() {
                     </div>
                   </div>
 
-                  {/* Price (for limit orders) */}
                   {orderForm.orderType !== 'market' && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Price
-                      </label>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Price</label>
                       <input
                         type="number"
                         value={orderForm.price}
-                        onChange={(e) =>
-                          setOrderForm((prev) => ({
-                            ...prev,
-                            price: parseFloat(e.target.value),
-                          }))
-                        }
+                        onChange={(e) => setOrderForm((prev) => ({ ...prev, price: parseFloat(e.target.value || '0') }))}
                         className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
-                        placeholder="0.0"
                       />
                     </div>
                   )}
 
-                  {/* Leverage */}
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                      <label className="text-sm font-medium text-gray-300">
-                        Leverage
-                      </label>
-                      <span className="text-sm font-semibold text-blue-400">
-                        {orderForm.leverage}x
-                      </span>
+                      <label className="text-sm font-medium text-gray-300">Leverage</label>
+                      <span className="text-sm font-semibold text-blue-400">{orderForm.leverage}x</span>
                     </div>
                     <input
                       type="range"
                       min="1"
-                      max="50"
+                      max="10"
                       value={orderForm.leverage}
-                      onChange={(e) =>
-                        setOrderForm((prev) => ({
-                          ...prev,
-                          leverage: parseInt(e.target.value),
-                        }))
-                      }
+                      onChange={(e) => setOrderForm((prev) => ({ ...prev, leverage: parseInt(e.target.value) }))}
                       className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
                     />
                   </div>
 
-                  {/* Stop Loss & Take Profit */}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
-                        <input
-                          type="checkbox"
-                          checked={orderForm.stopLossEnabled}
-                          onChange={(e) =>
-                            setOrderForm((prev) => ({
-                              ...prev,
-                              stopLossEnabled: e.target.checked,
-                            }))
-                          }
-                          className="w-4 h-4 accent-red-600"
-                        />
-                        <label className="text-sm font-medium text-gray-300">
-                          Stop Loss
-                        </label>
+                        <input type="checkbox" checked={orderForm.stopLossEnabled} onChange={(e) => setOrderForm((prev) => ({ ...prev, stopLossEnabled: e.target.checked }))} className="w-4 h-4 accent-red-600" />
+                        <label className="text-sm font-medium text-gray-300">Stop Loss</label>
                       </div>
                       <input
                         type="number"
                         disabled={!orderForm.stopLossEnabled}
                         value={orderForm.stopLoss}
-                        onChange={(e) =>
-                          setOrderForm((prev) => ({
-                            ...prev,
-                            stopLoss: parseFloat(e.target.value),
-                          }))
-                        }
-                        className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-red-500 focus:outline-none disabled:opacity-50"
-                        placeholder="0.0"
+                        onChange={(e) => setOrderForm((prev) => ({ ...prev, stopLoss: parseFloat(e.target.value || '0') }))}
+                        className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white disabled:opacity-50"
                       />
                     </div>
                     <div>
                       <div className="flex items-center gap-2 mb-2">
-                        <input
-                          type="checkbox"
-                          checked={orderForm.takeProfitEnabled}
-                          onChange={(e) =>
-                            setOrderForm((prev) => ({
-                              ...prev,
-                              takeProfitEnabled: e.target.checked,
-                            }))
-                          }
-                          className="w-4 h-4 accent-green-600"
-                        />
-                        <label className="text-sm font-medium text-gray-300">
-                          Take Profit
-                        </label>
+                        <input type="checkbox" checked={orderForm.takeProfitEnabled} onChange={(e) => setOrderForm((prev) => ({ ...prev, takeProfitEnabled: e.target.checked }))} className="w-4 h-4 accent-green-600" />
+                        <label className="text-sm font-medium text-gray-300">Take Profit</label>
                       </div>
                       <input
                         type="number"
                         disabled={!orderForm.takeProfitEnabled}
                         value={orderForm.takeProfit}
-                        onChange={(e) =>
-                          setOrderForm((prev) => ({
-                            ...prev,
-                            takeProfit: parseFloat(e.target.value),
-                          }))
-                        }
-                        className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-green-500 focus:outline-none disabled:opacity-50"
-                        placeholder="0.0"
+                        onChange={(e) => setOrderForm((prev) => ({ ...prev, takeProfit: parseFloat(e.target.value || '0') }))}
+                        className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white disabled:opacity-50"
                       />
                     </div>
                   </div>
 
-                  {/* Order Preview */}
                   <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Estimated Cost</span>
-                      <span className="text-white font-medium">
-                        ${estimatedCost.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Fees</span>
-                      <span className="text-white font-medium">
-                        ${fees.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="border-t border-gray-700 pt-2 flex justify-between">
-                      <span className="text-gray-300 font-medium">Total Cost</span>
-                      <span className="text-blue-400 font-semibold">
-                        ${totalCost.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between pt-2">
-                      <span className="text-gray-400">Liquidation Price</span>
-                      <span className="text-yellow-400 font-medium">
-                        ${liquidationPrice.toFixed(0)}
-                      </span>
-                    </div>
+                    <div className="flex justify-between"><span className="text-gray-400">Estimated Cost</span><span className="text-white font-medium">{formatUSD(estimatedCost)}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">Fees</span><span className="text-white font-medium">{formatUSD(fees)}</span></div>
+                    <div className="border-t border-gray-700 pt-2 flex justify-between"><span className="text-gray-300 font-medium">Total Cost</span><span className="text-blue-400 font-semibold">{formatUSD(totalCost)}</span></div>
+                    <div className="flex justify-between pt-2"><span className="text-gray-400">Liquidation Price</span><span className="text-yellow-400 font-medium">{formatPrice(liquidationPrice)}</span></div>
                   </div>
 
-                  {/* Place Order Button */}
-                  <button className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors">
-                    Place Order
+                  <button
+                    onClick={handlePlaceOrder}
+                    disabled={isSubmitting || !store.apiKeys.hyperliquidPrivateKey || !store.apiKeys.hyperliquidWallet}
+                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white rounded-lg font-semibold transition-colors"
+                  >
+                    {isSubmitting ? 'Submitting...' : 'Place Order'}
                   </button>
                 </div>
               </div>
             </Card>
           </div>
 
-          {/* Market Info & Quick Stats */}
           <Card>
             <div className="p-6 space-y-6">
               <div>
-                <h3 className="text-sm font-medium text-gray-400 mb-3">
-                  Current Price
-                </h3>
+                <h3 className="text-sm font-medium text-gray-400 mb-3">Current Price</h3>
                 <div>
-                  <p className="text-3xl font-bold text-white">$46,850</p>
+                  <p className="text-3xl font-bold text-white">{currentPrice ? formatPrice(currentPrice) : '—'}</p>
                   <p className="text-green-400 text-sm mt-1 flex items-center gap-1">
                     <TrendingUp className="w-4 h-4" />
-                    +2.34% (24h)
+                    Store-driven market context
                   </p>
                 </div>
               </div>
 
               <div className="space-y-3">
                 <div className="bg-gray-800/50 rounded-lg p-3">
-                  <p className="text-gray-400 text-xs mb-1">24h Volume</p>
-                  <p className="text-white font-semibold">$28.5B</p>
-                </div>
-                <div className="bg-gray-800/50 rounded-lg p-3">
-                  <p className="text-gray-400 text-xs mb-1">Funding Rate</p>
-                  <p className="text-blue-400 font-semibold">+0.0156%</p>
-                </div>
-                <div className="bg-gray-800/50 rounded-lg p-3">
-                  <p className="text-gray-400 text-xs mb-1">Open Interest</p>
-                  <p className="text-white font-semibold">$12.4B</p>
-                </div>
-                <div className="bg-gray-800/50 rounded-lg p-3">
                   <p className="text-gray-400 text-xs mb-1">Available Balance</p>
-                  <p className="text-green-400 font-semibold">$50,000</p>
+                  <p className="text-white font-semibold">{formatUSD(store.accountBalance || 0)}</p>
+                </div>
+                <div className="bg-gray-800/50 rounded-lg p-3">
+                  <p className="text-gray-400 text-xs mb-1">Risk Max Position</p>
+                  <p className="text-blue-400 font-semibold">{formatUSD(store.riskSettings.maxPositionSize)}</p>
+                </div>
+                <div className="bg-gray-800/50 rounded-lg p-3">
+                  <p className="text-gray-400 text-xs mb-1">Open Orders</p>
+                  <p className="text-white font-semibold">{openOrders.length}</p>
+                </div>
+                <div className="bg-gray-800/50 rounded-lg p-3">
+                  <p className="text-gray-400 text-xs mb-1">Recent Trades</p>
+                  <p className="text-green-400 font-semibold">{recentTrades.length}</p>
                 </div>
               </div>
             </div>
           </Card>
         </div>
 
-        {/* Open Orders */}
         <Card>
           <div className="p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-white">Open Orders</h2>
-              <button className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium transition-colors">
-                Cancel All
-              </button>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-700">
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Coin
-                    </th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Type
-                    </th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Side
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Size
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Price
-                    </th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Status
-                    </th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Created
-                    </th>
-                    <th className="text-center py-3 px-4 text-gray-400 font-medium">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {OPEN_ORDERS.map((order) => (
-                    <tr
-                      key={order.id}
-                      className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors"
-                    >
-                      <td className="py-3 px-4 text-white font-semibold">{order.coin}</td>
-                      <td className="py-3 px-4 text-gray-300">{order.type}</td>
-                      <td className="py-3 px-4">
-                        <span
-                          className={`px-2 py-1 rounded text-xs font-medium ${
-                            order.side === 'Buy'
-                              ? 'bg-green-500/20 text-green-400'
-                              : 'bg-red-500/20 text-red-400'
-                          }`}
-                        >
-                          {order.side}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-right text-white">
-                        {order.size}
-                      </td>
-                      <td className="py-3 px-4 text-right text-white">
-                        ${order.price.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-500/20 text-yellow-400">
-                          {order.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-gray-400">{order.created}</td>
-                      <td className="py-3 px-4 text-center">
-                        <button className="p-1 hover:bg-gray-700 rounded transition-colors">
-                          <MoreVertical className="w-4 h-4 text-gray-400" />
-                        </button>
-                      </td>
+            {openOrders.length === 0 ? (
+              <div className="text-sm text-gray-400">No open orders stored yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-700">
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Coin</th>
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Type</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Size</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Price</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {openOrders.map((order: any, idx: number) => (
+                      <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors">
+                        <td className="py-3 px-4 text-white font-semibold">{order.coin || '—'}</td>
+                        <td className="py-3 px-4 text-gray-300">{order.type || order.orderType || '—'}</td>
+                        <td className="py-3 px-4 text-right text-white">{order.size || '—'}</td>
+                        <td className="py-3 px-4 text-right text-white">{order.price ? formatPrice(order.price) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </Card>
 
-        {/* Trade History */}
         <Card>
           <div className="p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-white">Trade History</h2>
-              <button className="px-4 py-2 flex items-center gap-2 border border-gray-700 hover:border-blue-500 text-gray-300 hover:text-white rounded text-sm font-medium transition-colors">
-                <Download className="w-4 h-4" />
-                Export CSV
+              <button onClick={exportTrades} className="px-4 py-2 flex items-center gap-2 border border-gray-700 hover:border-blue-500 text-gray-300 hover:text-white rounded text-sm font-medium transition-colors">
+                <Download className="w-4 h-4" /> Export JSON
               </button>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-700">
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Date
-                    </th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Coin
-                    </th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Side
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Size
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Entry
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      Exit
-                    </th>
-                    <th className="text-right py-3 px-4 text-gray-400 font-medium">
-                      PnL
-                    </th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium">
-                      Strategy
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {TRADE_HISTORY.map((trade) => (
-                    <tr
-                      key={trade.id}
-                      className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors"
-                    >
-                      <td className="py-3 px-4 text-white">{trade.date}</td>
-                      <td className="py-3 px-4 text-white font-semibold">{trade.coin}</td>
-                      <td className="py-3 px-4">
-                        <span
-                          className={`px-2 py-1 rounded text-xs font-medium ${
-                            trade.side === 'Buy'
-                              ? 'bg-green-500/20 text-green-400'
-                              : 'bg-red-500/20 text-red-400'
-                          }`}
-                        >
-                          {trade.side}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-right text-white">
-                        {trade.size}
-                      </td>
-                      <td className="py-3 px-4 text-right text-white">
-                        ${trade.entry.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-right text-white">
-                        ${trade.exit.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-right font-semibold text-green-400">
-                        +${trade.pnl.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-gray-400">{trade.strategy}</td>
+            {recentTrades.length === 0 ? (
+              <div className="text-sm text-gray-400">No recent trades stored yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-700">
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Time</th>
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Coin</th>
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Direction</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Size</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Entry</th>
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="mt-4 flex justify-center gap-2">
-              <button className="px-4 py-2 border border-gray-700 rounded text-sm text-gray-300">
-                Previous
-              </button>
-              <button className="px-4 py-2 bg-blue-600 text-white rounded text-sm">
-                1
-              </button>
-              <button className="px-4 py-2 border border-gray-700 rounded text-sm text-gray-300">
-                2
-              </button>
-              <button className="px-4 py-2 border border-gray-700 rounded text-sm text-gray-300">
-                Next
-              </button>
-            </div>
+                  </thead>
+                  <tbody>
+                    {recentTrades.map((trade: any, idx: number) => (
+                      <tr key={trade.id || idx} className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors">
+                        <td className="py-3 px-4 text-white">{trade.timestamp ? formatTimestamp(trade.timestamp, true) : '—'}</td>
+                        <td className="py-3 px-4 text-white font-semibold">{trade.coin}</td>
+                        <td className="py-3 px-4">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${String(trade.direction).toUpperCase().includes('LONG') ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                            {trade.direction}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-right text-white">{trade.size}</td>
+                        <td className="py-3 px-4 text-right text-white">{trade.entryPrice ? formatPrice(trade.entryPrice) : '—'}</td>
+                        <td className="py-3 px-4 text-gray-400">{trade.status || 'open'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </Card>
       </div>

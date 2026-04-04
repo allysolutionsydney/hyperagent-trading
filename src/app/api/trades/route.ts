@@ -12,7 +12,6 @@ async function validateRiskManagement(
   params: any,
   riskConfig: RiskConfig
 ): Promise<{ valid: boolean; reason?: string }> {
-  // Check position size limit
   if (riskConfig.maxPositionSize && params.size) {
     if (params.size > riskConfig.maxPositionSize) {
       return {
@@ -22,7 +21,6 @@ async function validateRiskManagement(
     }
   }
 
-  // Check leverage limit
   if (riskConfig.maxLeverage && params.leverage) {
     if (params.leverage > riskConfig.maxLeverage) {
       return {
@@ -32,7 +30,6 @@ async function validateRiskManagement(
     }
   }
 
-  // Check stop loss requirement
   if (riskConfig.stopLossRequired && !params.stopLoss) {
     return {
       valid: false,
@@ -69,7 +66,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate risk management for trade execution actions
     if (['place', 'modify'].includes(action) && riskConfig) {
       const riskValidation = await validateRiskManagement(params, riskConfig);
       if (!riskValidation.valid) {
@@ -81,20 +77,30 @@ export async function POST(request: NextRequest) {
     }
 
     const client = new HyperliquidClient({
-      wallet,
+      walletAddress: wallet,
       privateKey,
-      testnet: isTestnet,
+      isTestnet,
     });
 
     switch (action) {
       case 'place': {
-        if (!params.coin || !params.size) {
+        const { coin, isBuy, size, price, orderType = 'Limit', reduceOnly = false, clOrdId } = params;
+        if (!coin || size === undefined || price === undefined || typeof isBuy !== 'boolean') {
           return NextResponse.json(
-            { error: 'Missing required parameters: coin, size' },
+            { error: 'Missing required parameters: coin, isBuy, size, price' },
             { status: 400 }
           );
         }
-        const result = await client.placeOrder(params);
+
+        const result = await client.placeOrder(
+          coin,
+          isBuy,
+          Number(size),
+          Number(price),
+          orderType,
+          reduceOnly,
+          clOrdId
+        );
         return NextResponse.json({ data: result });
       }
 
@@ -105,32 +111,30 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        const result = await client.cancelOrder({
-          coin: params.coin,
-          orderId: params.orderId,
-        });
+        const result = await client.cancelOrder(params.coin, Number(params.orderId));
         return NextResponse.json({ data: result });
       }
 
       case 'cancelAll': {
-        if (!params.coin) {
-          return NextResponse.json(
-            { error: 'Missing required parameter: coin' },
-            { status: 400 }
-          );
-        }
-        const result = await client.cancelAllOrders(params.coin);
+        const result = await client.cancelAllOrders();
         return NextResponse.json({ data: result });
       }
 
       case 'modify': {
-        if (!params.coin || params.orderId === undefined) {
+        const { orderId, coin, isBuy, size, price } = params;
+        if (!coin || orderId === undefined || size === undefined || price === undefined || typeof isBuy !== 'boolean') {
           return NextResponse.json(
-            { error: 'Missing required parameters: coin, orderId' },
+            { error: 'Missing required parameters: orderId, coin, isBuy, size, price' },
             { status: 400 }
           );
         }
-        const result = await client.modifyOrder(params);
+        const result = await client.modifyOrder(
+          Number(orderId),
+          coin,
+          isBuy,
+          Number(size),
+          Number(price)
+        );
         return NextResponse.json({ data: result });
       }
 

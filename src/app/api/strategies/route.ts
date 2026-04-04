@@ -1,25 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { StrategyManager } from '@/lib/strategies';
-
-export interface CandleData {
-  timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
-export interface StrategyConfig {
-  name: string;
-  enabled: boolean;
-  parameters?: Record<string, any>;
-}
+import { createDefaultStrategyManager } from '@/lib/strategies';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, candles, config, startTime, endTime } = body;
+    const { action, candles, aiResponse } = body;
 
     if (!action) {
       return NextResponse.json(
@@ -37,49 +22,27 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        if (!config || !Array.isArray(config)) {
-          return NextResponse.json(
-            { error: 'Missing or invalid required parameter: config' },
-            { status: 400 }
-          );
-        }
-
-        const manager = new StrategyManager(config);
-        const results = manager.runStrategies(candles);
+        const manager = createDefaultStrategyManager();
+        const result = manager.analyze(candles, aiResponse);
 
         return NextResponse.json({
           data: {
-            individualSignals: results.individualSignals,
-            compositeSignal: results.compositeSignal,
-            timestamp: new Date().toISOString(),
+            signals: result.signals,
+            compositeSignal: result.compositeSignal,
+            compositeStrength: result.compositeStrength,
+            compositeConfidence: result.compositeConfidence,
+            reasoning: result.reasoning,
+            timestamp: result.timestamp,
           },
         });
       }
 
-      case 'backtest': {
-        if (!candles || !Array.isArray(candles)) {
-          return NextResponse.json(
-            { error: 'Missing or invalid required parameter: candles' },
-            { status: 400 }
-          );
-        }
-
-        if (!config || !Array.isArray(config)) {
-          return NextResponse.json(
-            { error: 'Missing or invalid required parameter: config' },
-            { status: 400 }
-          );
-        }
-
-        const manager = new StrategyManager(config);
-        const backtest = await manager.backtestStrategies(candles);
-
+      case 'performance': {
+        const manager = createDefaultStrategyManager();
         return NextResponse.json({
           data: {
-            results: backtest.results,
-            performance: backtest.performance,
-            stats: backtest.stats,
-            timestamp: new Date().toISOString(),
+            performance: manager.getPerformance(),
+            timestamp: Date.now(),
           },
         });
       }

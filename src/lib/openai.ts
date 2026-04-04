@@ -36,6 +36,29 @@ You provide:
 Never provide financial advice, but rather educational analysis to inform trading decisions.
 Focus on probability and risk/reward ratios rather than certainty.`;
 
+  private async createJsonCompletion(userMessage: string, maxTokens: number): Promise<{ content: string; promptTokens: number; completionTokens: number }> {
+    const response = await this.client.chat.completions.create({
+      model: 'gpt-4o',
+      max_tokens: maxTokens,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: this.systemPrompt },
+        { role: 'user', content: userMessage },
+      ],
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error('Unexpected response type');
+    }
+
+    return {
+      content,
+      promptTokens: response.usage?.prompt_tokens ?? 0,
+      completionTokens: response.usage?.completion_tokens ?? 0,
+    };
+  }
+
   async analyzeMarket(
     candles: Candle[],
     coin: string,
@@ -75,21 +98,10 @@ Format your response as JSON with these fields:
   "technicalSummary": string
 }`;
 
-      const response = await this.client.messages.create({
-        model: 'gpt-4o',
-        max_tokens: 1500,
-        system: this.systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
-      });
+      const response = await this.createJsonCompletion(userMessage, 1500);
+      this.tokenUsage += response.promptTokens + response.completionTokens;
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new Error('Unexpected response type');
-      }
-
-      this.tokenUsage += response.usage.input_tokens + response.usage.output_tokens;
-
-      const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         return this.getFallbackAnalysis();
       }
@@ -108,7 +120,7 @@ Format your response as JSON with these fields:
         riskRewardRatio: analysis.riskRewardRatio,
         confidence: analysis.confidence,
         technicalSummary: analysis.technicalSummary,
-        rawResponse: content.text,
+        rawResponse: response.content,
       };
     } catch (error) {
       console.error('Market analysis error:', error);
@@ -149,21 +161,10 @@ Format as JSON:
   "summary": string
 }`;
 
-      const response = await this.client.messages.create({
-        model: 'gpt-4o',
-        max_tokens: 1000,
-        system: this.systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
-      });
+      const response = await this.createJsonCompletion(userMessage, 1000);
+      this.tokenUsage += response.promptTokens + response.completionTokens;
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new Error('Unexpected response type');
-      }
-
-      this.tokenUsage += response.usage.input_tokens + response.usage.output_tokens;
-
-      const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         return this.getFallbackSentiment();
       }
@@ -178,7 +179,7 @@ Format as JSON:
         riskFactors: sentiment.riskFactors,
         positioning: sentiment.positioning,
         summary: sentiment.summary,
-        rawResponse: content.text,
+        rawResponse: response.content,
       };
     } catch (error) {
       console.error('Sentiment analysis error:', error);
@@ -241,21 +242,10 @@ Format as JSON:
   "confidence": number
 }`;
 
-      const response = await this.client.messages.create({
-        model: 'gpt-4o',
-        max_tokens: 1500,
-        system: this.systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
-      });
+      const response = await this.createJsonCompletion(userMessage, 1500);
+      this.tokenUsage += response.promptTokens + response.completionTokens;
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new Error('Unexpected response type');
-      }
-
-      this.tokenUsage += response.usage.input_tokens + response.usage.output_tokens;
-
-      const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         throw new Error('Could not parse trade idea');
       }
@@ -277,7 +267,7 @@ Format as JSON:
         exitConditions: idea.exitConditions,
         timeHorizon: idea.timeHorizon,
         confidence: idea.confidence,
-        rawResponse: content.text,
+        rawResponse: response.content,
       };
     } catch (error) {
       console.error('Trade idea generation error:', error);
@@ -329,21 +319,10 @@ Format as JSON:
   "riskManagementNotes": string
 }`;
 
-      const response = await this.client.messages.create({
-        model: 'gpt-4o',
-        max_tokens: 1200,
-        system: this.systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
-      });
+      const response = await this.createJsonCompletion(userMessage, 1200);
+      this.tokenUsage += response.promptTokens + response.completionTokens;
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new Error('Unexpected response type');
-      }
-
-      this.tokenUsage += response.usage.input_tokens + response.usage.output_tokens;
-
-      const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         return {
           analysis: 'Could not evaluate trade',
@@ -379,21 +358,24 @@ Format as JSON:
         content: msg.content,
       }));
 
-      const response = await this.client.messages.create({
+      const response = await this.client.chat.completions.create({
         model: 'gpt-4o',
         max_tokens: 2000,
-        system: this.systemPrompt,
-        messages: formattedMessages,
+        messages: [
+          { role: 'system', content: this.systemPrompt },
+          ...formattedMessages,
+        ],
       });
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
         throw new Error('Unexpected response type');
       }
 
-      this.tokenUsage += response.usage.input_tokens + response.usage.output_tokens;
+      this.tokenUsage += response.usage?.prompt_tokens ?? 0;
+      this.tokenUsage += response.usage?.completion_tokens ?? 0;
 
-      return content.text;
+      return content;
     } catch (error) {
       console.error('Chat error:', error);
       return 'I encountered an error processing your question. Please try again.';

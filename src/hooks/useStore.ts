@@ -11,10 +11,7 @@ import {
   Signal,
   MarketRegime,
 } from '../types';
-
-// ============================================================================
-// SETTINGS SLICE
-// ============================================================================
+import { StoredIntelligence } from '../lib/intelligence';
 
 interface ApiKeys {
   openai: string;
@@ -23,18 +20,29 @@ interface ApiKeys {
   openRouter: string;
 }
 
+interface SettingsSnapshot {
+  apiKeys: {
+    openai: string;
+    hyperliquid: string;
+    walletAddress: string;
+    openrouter: string;
+  };
+  network: 'testnet' | 'mainnet';
+  riskSettings: Record<string, any>;
+  strategies: Record<string, any>;
+  tradingPrefs: Record<string, any>;
+}
+
 interface SettingsSlice {
   apiKeys: ApiKeys;
   isTestnet: boolean;
+  settings: SettingsSnapshot;
   setApiKey: (provider: keyof ApiKeys, key: string) => void;
   setTestnet: (testnet: boolean) => void;
   saveSettings: () => void;
   loadSettings: () => void;
+  updateSettings: (settings: Partial<SettingsSnapshot>) => void;
 }
-
-// ============================================================================
-// MARKET SLICE
-// ============================================================================
 
 interface MarketSlice {
   selectedCoin: string;
@@ -51,10 +59,6 @@ interface MarketSlice {
   setAllMids: (mids: Record<string, string>) => void;
   updateAllMids: (updates: Record<string, string>) => void;
 }
-
-// ============================================================================
-// STRATEGY SLICE
-// ============================================================================
 
 interface StrategyState {
   enabled: boolean;
@@ -79,10 +83,6 @@ interface StrategySlice {
   setCompositeSignal: (signal: CompositeSignal) => void;
 }
 
-// ============================================================================
-// TRADING SLICE
-// ============================================================================
-
 interface RiskSettings {
   maxPositionSize: number;
   stopLossPercent: number;
@@ -104,10 +104,6 @@ interface TradingSlice {
   setRiskSettings: (settings: Partial<RiskSettings>) => void;
 }
 
-// ============================================================================
-// AI SLICE
-// ============================================================================
-
 interface AISlice {
   analysisResult: AnalysisResult | null;
   isAnalyzing: boolean;
@@ -117,10 +113,6 @@ interface AISlice {
   addChatMessage: (message: Message) => void;
   clearChatMessages: () => void;
 }
-
-// ============================================================================
-// INTELLIGENCE SLICE
-// ============================================================================
 
 interface LearningProgress {
   totalTrades: number;
@@ -138,14 +130,13 @@ interface IntelligenceSlice {
   learningProgress: LearningProgress;
   strategyRankings: StrategyRanking[];
   currentRegime: MarketRegime;
+  intelligenceState: StoredIntelligence | null;
   setLearningProgress: (progress: Partial<LearningProgress>) => void;
   setStrategyRankings: (rankings: StrategyRanking[]) => void;
   setCurrentRegime: (regime: MarketRegime) => void;
+  setIntelligenceState: (state: StoredIntelligence | null) => void;
+  resetLearningData: () => void;
 }
-
-// ============================================================================
-// COMBINED STORE TYPE
-// ============================================================================
 
 type AppStore = SettingsSlice &
   MarketSlice &
@@ -153,10 +144,6 @@ type AppStore = SettingsSlice &
   TradingSlice &
   AISlice &
   IntelligenceSlice;
-
-// ============================================================================
-// ZUSTAND STORE
-// ============================================================================
 
 const defaultRiskSettings: RiskSettings = {
   maxPositionSize: 5000,
@@ -171,6 +158,33 @@ const defaultApiKeys: ApiKeys = {
   hyperliquidPrivateKey: '',
   hyperliquidWallet: '',
   openRouter: '',
+};
+
+const defaultSettings: SettingsSnapshot = {
+  apiKeys: {
+    openai: '',
+    hyperliquid: '',
+    walletAddress: '',
+    openrouter: '',
+  },
+  network: 'testnet',
+  riskSettings: {
+    maxPositionSize: 10000,
+    maxLeverage: 10,
+    stopLossDefault: 5,
+    takeProfitDefault: 15,
+    maxDailyLoss: 5000,
+    maxOpenPositions: 5,
+  },
+  strategies: {},
+  tradingPrefs: {
+    orderType: 'limit',
+    defaultCoin: 'USDC',
+    minSignalStrength: 60,
+    minConfidence: 70,
+    analysisInterval: 60,
+    tradeCooldown: 30,
+  },
 };
 
 const defaultCompositeSignal: CompositeSignal = {
@@ -189,24 +203,42 @@ const defaultLearningProgress: LearningProgress = {
 export const useStore = create<AppStore>()(
   persist(
     (set, get) => ({
-      // ========================================================================
-      // SETTINGS SLICE
-      // ========================================================================
       apiKeys: defaultApiKeys,
       isTestnet: false,
+      settings: defaultSettings,
 
       setApiKey: (provider, key) =>
-        set((state) => ({
-          apiKeys: { ...state.apiKeys, [provider]: key },
-        })),
+        set((state) => {
+          const nextApiKeys = { ...state.apiKeys, [provider]: key };
+          return {
+            apiKeys: nextApiKeys,
+            settings: {
+              ...state.settings,
+              apiKeys: {
+                openai: nextApiKeys.openai,
+                hyperliquid: nextApiKeys.hyperliquidPrivateKey,
+                walletAddress: nextApiKeys.hyperliquidWallet,
+                openrouter: nextApiKeys.openRouter,
+              },
+            },
+          };
+        }),
 
-      setTestnet: (testnet) => set({ isTestnet: testnet }),
+      setTestnet: (testnet) =>
+        set((state) => ({
+          isTestnet: testnet,
+          settings: {
+            ...state.settings,
+            network: testnet ? 'testnet' : 'mainnet',
+          },
+        })),
 
       saveSettings: () => {
         const state = get();
         const settings = {
           apiKeys: state.apiKeys,
           isTestnet: state.isTestnet,
+          settings: state.settings,
         };
         localStorage.setItem('trading-agent-settings', JSON.stringify(settings));
       },
@@ -215,10 +247,11 @@ export const useStore = create<AppStore>()(
         const stored = localStorage.getItem('trading-agent-settings');
         if (stored) {
           try {
-            const settings = JSON.parse(stored);
+            const parsed = JSON.parse(stored);
             set({
-              apiKeys: settings.apiKeys || defaultApiKeys,
-              isTestnet: settings.isTestnet ?? false,
+              apiKeys: parsed.apiKeys || defaultApiKeys,
+              isTestnet: parsed.isTestnet ?? false,
+              settings: parsed.settings || defaultSettings,
             });
           } catch (error) {
             console.error('Failed to load settings:', error);
@@ -226,9 +259,29 @@ export const useStore = create<AppStore>()(
         }
       },
 
-      // ========================================================================
-      // MARKET SLICE
-      // ========================================================================
+      updateSettings: (incoming) =>
+        set((state) => {
+          const nextSettings: SettingsSnapshot = {
+            ...state.settings,
+            ...incoming,
+            apiKeys: {
+              ...state.settings.apiKeys,
+              ...(incoming.apiKeys || {}),
+            },
+          };
+
+          return {
+            settings: nextSettings,
+            apiKeys: {
+              openai: nextSettings.apiKeys.openai || '',
+              hyperliquidPrivateKey: nextSettings.apiKeys.hyperliquid || '',
+              hyperliquidWallet: nextSettings.apiKeys.walletAddress || '',
+              openRouter: nextSettings.apiKeys.openrouter || '',
+            },
+            isTestnet: nextSettings.network === 'testnet',
+          };
+        }),
+
       selectedCoin: 'BTC',
       candles: [],
       orderBook: null,
@@ -237,25 +290,16 @@ export const useStore = create<AppStore>()(
       allMids: {},
 
       setSelectedCoin: (coin) => set({ selectedCoin: coin }),
-
       setCandles: (candles) => set({ candles }),
-
       setOrderBook: (orderBook) => set({ orderBook }),
-
       setPositions: (positions) => set({ positions }),
-
       setAccountBalance: (balance) => set({ accountBalance: balance }),
-
       setAllMids: (mids) => set({ allMids: mids }),
-
       updateAllMids: (updates) =>
         set((state) => ({
           allMids: { ...state.allMids, ...updates },
         })),
 
-      // ========================================================================
-      // STRATEGY SLICE
-      // ========================================================================
       strategies: {
         mean_reversion: { enabled: true, weight: 1, params: { threshold: 2 } },
         momentum: { enabled: true, weight: 1, params: { period: 20 } },
@@ -296,65 +340,47 @@ export const useStore = create<AppStore>()(
         })),
 
       setSignals: (signals) => set({ signals }),
-
       setCompositeSignal: (signal) => set({ compositeSignal: signal }),
 
-      // ========================================================================
-      // TRADING SLICE
-      // ========================================================================
       openOrders: [],
       recentTrades: [],
       isAutoTrading: false,
       riskSettings: defaultRiskSettings,
 
       setOpenOrders: (orders) => set({ openOrders: orders }),
-
       addOrder: (order) =>
         set((state) => ({
           openOrders: [...state.openOrders, order],
         })),
-
       removeOrder: (orderId) =>
         set((state) => ({
           openOrders: state.openOrders.filter((o) => o.id !== orderId),
         })),
-
       addTrade: (trade) =>
         set((state) => ({
           recentTrades: [trade, ...state.recentTrades].slice(0, 50),
         })),
-
       toggleAutoTrading: (enabled) => set({ isAutoTrading: enabled }),
-
       setRiskSettings: (settings) =>
         set((state) => ({
           riskSettings: { ...state.riskSettings, ...settings },
         })),
 
-      // ========================================================================
-      // AI SLICE
-      // ========================================================================
       analysisResult: null,
       isAnalyzing: false,
       chatMessages: [],
-
       setAnalysis: (result) => set({ analysisResult: result }),
-
       setAnalyzing: (analyzing) => set({ isAnalyzing: analyzing }),
-
       addChatMessage: (message) =>
         set((state) => ({
           chatMessages: [...state.chatMessages, message],
         })),
-
       clearChatMessages: () => set({ chatMessages: [] }),
 
-      // ========================================================================
-      // INTELLIGENCE SLICE
-      // ========================================================================
       learningProgress: defaultLearningProgress,
       strategyRankings: [],
       currentRegime: 'ranging' as MarketRegime,
+      intelligenceState: null,
 
       setLearningProgress: (progress) =>
         set((state) => ({
@@ -362,18 +388,27 @@ export const useStore = create<AppStore>()(
         })),
 
       setStrategyRankings: (rankings) => set({ strategyRankings: rankings }),
-
       setCurrentRegime: (regime) => set({ currentRegime: regime }),
+      setIntelligenceState: (state) => set({ intelligenceState: state }),
+      resetLearningData: () =>
+        set({
+          intelligenceState: null,
+          learningProgress: defaultLearningProgress,
+          strategyRankings: [],
+          currentRegime: 'ranging' as MarketRegime,
+        }),
     }),
     {
       name: 'trading-agent-store',
       partialize: (state) => ({
         apiKeys: state.apiKeys,
         isTestnet: state.isTestnet,
+        settings: state.settings,
         riskSettings: state.riskSettings,
         strategies: state.strategies,
         learningProgress: state.learningProgress,
         strategyRankings: state.strategyRankings,
+        intelligenceState: state.intelligenceState,
       }),
     }
   )

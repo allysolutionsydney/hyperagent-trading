@@ -5,6 +5,7 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const action = searchParams.get('action');
+    const isTestnet = searchParams.get('testnet') === 'true';
 
     if (!action) {
       return NextResponse.json(
@@ -13,7 +14,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const client = new HyperliquidClient();
+    const client = new HyperliquidClient({ isTestnet });
 
     switch (action) {
       case 'candles': {
@@ -46,7 +47,7 @@ export async function GET(request: NextRequest) {
             { status: 400 }
           );
         }
-        const orderbook = await client.getOrderbook(coin);
+        const orderbook = await client.getOrderBook(coin);
         return NextResponse.json({ data: orderbook });
       }
 
@@ -68,8 +69,32 @@ export async function GET(request: NextRequest) {
       }
 
       case 'markets': {
-        const markets = await client.getMarkets();
+        const markets = await client.getMarketData();
         return NextResponse.json({ data: markets });
+      }
+
+      case 'l2': {
+        const coin = searchParams.get('coin');
+        if (!coin) {
+          return NextResponse.json(
+            { error: 'Missing required parameter: coin' },
+            { status: 400 }
+          );
+        }
+        const snapshot = await client.getL2Snapshot(coin);
+        return NextResponse.json({ data: snapshot });
+      }
+
+      case 'funding': {
+        const coin = searchParams.get('coin');
+        if (!coin) {
+          return NextResponse.json(
+            { error: 'Missing required parameter: coin' },
+            { status: 400 }
+          );
+        }
+        const funding = await client.getFundingHistory(coin);
+        return NextResponse.json({ data: funding });
       }
 
       default:
@@ -91,7 +116,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, wallet, privateKey, ...params } = body;
+    const { action, wallet, privateKey, isTestnet = false, ...params } = body;
 
     if (!action) {
       return NextResponse.json(
@@ -108,29 +133,44 @@ export async function POST(request: NextRequest) {
     }
 
     const client = new HyperliquidClient({
-      wallet,
+      walletAddress: wallet,
       privateKey,
-      testnet: params.testnet || false,
+      isTestnet,
     });
 
     switch (action) {
       case 'placeOrder': {
-        const result = await client.placeOrder(params);
+        const { coin, isBuy, size, price, orderType = 'Limit', reduceOnly = false, clOrdId } = params;
+        const result = await client.placeOrder(
+          coin,
+          isBuy,
+          Number(size),
+          Number(price),
+          orderType,
+          reduceOnly,
+          clOrdId
+        );
         return NextResponse.json({ data: result });
       }
 
       case 'cancelOrder': {
-        const result = await client.cancelOrder(params);
+        const result = await client.cancelOrder(params.coin, Number(params.orderId));
         return NextResponse.json({ data: result });
       }
 
       case 'cancelAllOrders': {
-        const result = await client.cancelAllOrders(params.coin);
+        const result = await client.cancelAllOrders();
         return NextResponse.json({ data: result });
       }
 
       case 'modifyOrder': {
-        const result = await client.modifyOrder(params);
+        const result = await client.modifyOrder(
+          Number(params.orderId),
+          params.coin,
+          params.isBuy,
+          Number(params.size),
+          Number(params.price)
+        );
         return NextResponse.json({ data: result });
       }
 
